@@ -8,6 +8,15 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {StrategyManager} from "../src/StrategyManager.sol";
 import {Pausable4626Vault} from "../src/Pausable4626Vault.sol";
 
+
+// Interface for WETH validation
+interface IERC20Extended {
+    function symbol() external view returns (string memory);
+    function decimals() external view returns (uint8);
+    function balanceOf(address) external view returns (uint256);
+}
+
+
 contract DeployScript is Script {
     // Base network addresses
     address constant WETH_BASE = 0x4200000000000000000000000000000000000006;
@@ -38,6 +47,9 @@ contract DeployScript is Script {
         // console.log("Deployer balance:", deployer.balance);
         console.log("Config owner:", config.owner);
         console.log("Config treasury:", config.treasury);
+
+        // Validate WETH address
+        validateWETHAddress(WETH_BASE);
 
         vm.startBroadcast();
 
@@ -140,7 +152,9 @@ contract DeployScript is Script {
         console.log("VAULT=", address(vaultProxy));
     }
 
-    function getDeployConfig(address deployer) internal view returns (DeployConfig memory) {
+    function getDeployConfig(
+        address deployer
+    ) internal view returns (DeployConfig memory) {
         // Try to get config from environment variables, default to deployer
         address owner = vm.envOr("OWNER", deployer);
         address treasury = vm.envOr("TREASURY", deployer);
@@ -158,6 +172,64 @@ contract DeployScript is Script {
                 vaultName: vm.envOr("VAULT_NAME", string("botfedETH")),
                 vaultSymbol: vm.envOr("VAULT_SYMBOL", string("botfedETH"))
             });
+    }
+    function validateWETHAddress(address wethAddr) internal view {
+        console.log("=== VALIDATING WETH ADDRESS ===");
+        console.log("WETH address to validate:", wethAddr);
+
+        require(wethAddr != address(0), "WETH address cannot be zero");
+
+        // Check if it's a contract
+        uint256 codeSize;
+        assembly {
+            codeSize := extcodesize(wethAddr)
+        }
+        require(codeSize > 0, "WETH address is not a contract");
+        console.log("WETH address is a contract");
+
+        IERC20Extended weth = IERC20Extended(wethAddr);
+
+        // Check symbol
+        try weth.symbol() returns (string memory symbol) {
+            console.log("Token symbol:", symbol);
+            require(
+                keccak256(bytes(symbol)) == keccak256(bytes("WETH")) ||
+                    keccak256(bytes(symbol)) == keccak256(bytes("ETH")), // Some networks use "ETH"
+                "Token symbol is not WETH or ETH"
+            );
+            console.log("Symbol validation passed");
+        } catch {
+            revert("Failed to get token symbol");
+        }
+
+        // Check decimals
+        try weth.decimals() returns (uint8 decimals) {
+            console.log("Token decimals:", decimals);
+            require(decimals == 18, "Token decimals is not 18");
+            console.log("Decimals validation passed");
+        } catch {
+            revert("Failed to get token decimals");
+        }
+
+        // Check that WETH contract has substantial ETH backing (at least 1000 ETH)
+        // This verifies it's a real, active WETH contract and not a fake
+        uint256 ethBalance = wethAddr.balance;
+        console.log("WETH contract ETH balance:", ethBalance / 1e18, "ETH");
+        require(
+            ethBalance >= 1000 ether,
+            "WETH contract has less than 1000 ETH - possibly fake or inactive"
+        );
+        console.log("WETH contract has sufficient ETH backing (>=1000 ETH)");
+
+        // Additional sanity check - try ERC20 balanceOf call
+        try weth.balanceOf(address(0)) returns (uint256) {
+            // If this call succeeds, it's likely a proper ERC20
+            console.log("ERC20 balanceOf call succeeded");
+        } catch {
+            revert("Failed ERC20 balanceOf call - not a proper ERC20");
+        }
+
+        console.log("WETH address validation completed successfully");
     }
 }
 
