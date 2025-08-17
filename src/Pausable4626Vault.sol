@@ -13,6 +13,14 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 import {WithdrawRequestNFT} from "./WithdrawRequestNFT.sol";
 import {IStrategyManager} from "./StrategyManager.sol";
 
+// Add this interface at the top with other imports
+interface IWETH {
+    function deposit() external payable;
+    function withdraw(uint256) external;
+    function balanceOf(address) external view returns (uint256);
+    function transfer(address, uint256) external returns (bool);
+}
+
 /**
  * @title Pausable4626Vault
  * @notice Upgradeable ERC-4626 vault with pausing. Shares are ERC-20.
@@ -27,6 +35,8 @@ contract Pausable4626Vault is
     ReentrancyGuardUpgradeable
 {
     using SafeERC20 for IERC20;
+
+    address public immutable WETH;
 
     IStrategyManager public manager;
     WithdrawRequestNFT public withdrawNFT;
@@ -45,7 +55,9 @@ contract Pausable4626Vault is
     uint256 public amtRequested;
 
     /// @custom:oz-upgrades-unsafe-allow constructor
-    constructor() {
+    constructor(address _weth) {
+        require(_weth != address(0), "WETH address cannot be zero");
+        WETH = _weth;
         _disableInitializers(); // UUPS pattern safeguard
     }
 
@@ -112,7 +124,7 @@ contract Pausable4626Vault is
         emit ManagerSet(a);
     }
 
-    function setFulFiller(address a) external onlyOwner {
+    function setFulfiller(address a) external onlyOwner {
         require(a != address(0), "ZF");
         fulfiller = a;
         emit FulfillerSet(a);
@@ -336,7 +348,29 @@ contract Pausable4626Vault is
         }
     }
 
-    receive() external payable {}
+    // Replace the existing receive() function with this:
+    receive() external payable {
+        // If no ETH sent, do nothing
+        if (msg.value == 0) return;
+
+        if (address(asset()) == WETH) {
+            require(address(manager) != address(0), "manager not set");
+            require(!paused(), "deposits paused");
+
+            // Wrap ETH to WETH
+            IWETH(WETH).deposit{value: msg.value}();
+
+            // Mint shares 1:1 with deposited amount
+            _mint(msg.sender, msg.value);
+
+            // Push wrapped ETH to manager
+            _pushToManager(msg.value);
+
+            // Emit the standard deposit event (you might want to add a specific event)
+            emit Deposit(msg.sender, msg.sender, msg.value, msg.value);
+        }
+        // If asset is not WETH, ETH just stays in contract (emergency withdrawal available)
+    }
 
     /* ----------------------------- UUPS authorization -------------------------- */
 

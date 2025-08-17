@@ -10,7 +10,7 @@ import {Pausable4626Vault} from "../src/Pausable4626Vault.sol";
 import {StrategyManager} from "../src/StrategyManager.sol";
 import {WithdrawRequestNFT} from "../src/WithdrawRequestNFT.sol";
 
-// Mock WETH contract for testing
+// First, update your MockWETH to include the deposit function:
 contract MockWETH is IERC20 {
     mapping(address => uint256) private _balances;
     mapping(address => mapping(address => uint256)) private _allowances;
@@ -20,6 +20,22 @@ contract MockWETH is IERC20 {
     string public symbol = "WETH";
     uint8 public decimals = 18;
 
+    // Add this deposit function to make it behave like real WETH
+    function deposit() external payable {
+        _balances[msg.sender] += msg.value;
+        _totalSupply += msg.value;
+        emit Transfer(address(0), msg.sender, msg.value);
+    }
+
+    function withdraw(uint256 amount) external {
+        require(_balances[msg.sender] >= amount, "Insufficient balance");
+        _balances[msg.sender] -= amount;
+        _totalSupply -= amount;
+        payable(msg.sender).transfer(amount);
+        emit Transfer(msg.sender, address(0), amount);
+    }
+
+    // ... rest of your existing MockWETH functions ...
     function mint(address to, uint256 amount) external {
         _balances[to] += amount;
         _totalSupply += amount;
@@ -28,9 +44,11 @@ contract MockWETH is IERC20 {
     function totalSupply() external view returns (uint256) {
         return _totalSupply;
     }
+
     function balanceOf(address account) external view returns (uint256) {
         return _balances[account];
     }
+
     function allowance(
         address owner,
         address spender
@@ -59,6 +77,9 @@ contract MockWETH is IERC20 {
         _balances[to] += amount;
         return true;
     }
+
+    // Allow contract to receive ETH
+    receive() external payable {}
 }
 
 // Mock Strategy Manager for testing
@@ -104,7 +125,7 @@ contract Pausable4626VaultTest is Test {
         strategyManager = new MockStrategyManager(weth);
 
         // Deploy vault implementation
-        vaultImpl = new Pausable4626Vault();
+        vaultImpl = new Pausable4626Vault(address(weth));
 
         // Deploy vault proxy
         bytes memory initData = abi.encodeWithSelector(
@@ -547,14 +568,14 @@ contract Pausable4626VaultTest is Test {
         address newFulfiller = makeAddr("newFulfiller");
 
         vm.prank(owner);
-        vault.setFulFiller(newFulfiller);
+        vault.setFulfiller(newFulfiller);
 
         assertEq(vault.fulfiller(), newFulfiller);
 
         // Non-owner should fail
         vm.prank(user1);
         vm.expectRevert();
-        vault.setFulFiller(newFulfiller);
+        vault.setFulfiller(newFulfiller);
     }
 
     function test_PauseUnpause_OnlyOwner() public {
@@ -661,4 +682,164 @@ contract Pausable4626VaultTest is Test {
         assertEq(vault.balanceOf(user1), 7 ether); // 10 - 3
         assertEq(vault.balanceOf(user2), 0 ether); // 5 - 5
     }
+
+    function test_EthAutoDeposit_WhenAssetIsWETH() public {
+        uint256 ethAmount = 5 ether;
+        uint256 user1BalanceBefore = user1.balance;
+
+        // Give user1 some ETH
+        vm.deal(user1, ethAmount);
+
+        // Send ETH directly to vault (should auto-deposit)
+        vm.prank(user1);
+        (bool success, ) = address(vault).call{value: ethAmount}("");
+        assertTrue(success);
+
+        // Check that shares were minted 1:1
+        assertEq(vault.balanceOf(user1), ethAmount);
+        assertEq(vault.totalSupply(), ethAmount);
+        assertEq(vault.totalAssets(), ethAmount);
+
+        // Check WETH was wrapped and sent to strategy manager
+        assertEq(
+            weth.balanceOf(address(strategyManager)),
+            INITIAL_WETH + ethAmount
+        );
+
+        // Check user's ETH balance decreased
+        assertEq(user1.balance, 0);
+    }
+
+    function test_EthAutoDeposit_RevertsWhenPaused() public {
+        uint256 ethAmount = 5 ether;
+        vm.deal(user1, ethAmount);
+
+        // Pause the vault
+        vm.prank(owner);
+        vault.pause();
+
+        // ETH deposit should revert when paused
+        vm.prank(user1);
+        vm.expectRevert();
+        (bool success, ) = address(vault).call{value: ethAmount}("");
+    }
+
+    function test_EthAutoDeposit_RevertsWithoutManager() public {
+        // Deploy new vault without manager set
+        bytes memory initData = abi.encodeWithSelector(
+            Pausable4626Vault.initialize.selector,
+            address(weth),
+            "Test Vault",
+            "TEST",
+            owner,
+            address(0), // No manager
+            fulfiller
+        );
+        ERC1967Proxy proxy = new ERC1967Proxy(address(vaultImpl), initData);
+        Pausable4626Vault newVault = Pausable4626Vault(payable(address(proxy)));
+
+        uint256 ethAmount = 5 ether;
+        vm.deal(user1, ethAmount);
+
+        // Should revert when manager not set
+        vm.prank(user1);
+        vm.expectRevert(bytes("manager not set"));
+        (bool success, ) = address(newVault).call{value: ethAmount}("");
+    }
+
+    function test_EthAutoDeposit_ZeroAmount() public {
+        // Sending 0 ETH should succeed but do nothing
+        vm.prank(user1);
+        (bool success, ) = address(vault).call{value: 0}("");
+        assertTrue(success);
+
+        // No shares should be minted
+        assertEq(vault.balanceOf(user1), 0);
+        assertEq(vault.totalSupply(), 0);
+    }
+
+    function test_EthAutoDeposit_MultipleDeposits() public {
+        uint256 ethAmount1 = 3 ether;
+        uint256 ethAmount2 = 2 ether;
+
+        vm.deal(user1, ethAmount1);
+        vm.deal(user2, ethAmount2);
+
+        // First deposit
+        vm.prank(user1);
+        (bool success1, ) = address(vault).call{value: ethAmount1}("");
+        assertTrue(success1);
+
+        // Second deposit
+        vm.prank(user2);
+        (bool success2, ) = address(vault).call{value: ethAmount2}("");
+        assertTrue(success2);
+
+        // Check balances
+        assertEq(vault.balanceOf(user1), ethAmount1);
+        assertEq(vault.balanceOf(user2), ethAmount2);
+        assertEq(vault.totalSupply(), ethAmount1 + ethAmount2);
+        assertEq(vault.totalAssets(), ethAmount1 + ethAmount2);
+
+        // Check all WETH went to strategy manager
+        assertEq(
+            weth.balanceOf(address(strategyManager)),
+            INITIAL_WETH + ethAmount1 + ethAmount2
+        );
+    }
+
+    function test_EthAutoDeposit_WithNonWETHAsset() public {
+        // Deploy vault with a different asset (not WETH)
+        MockWETH otherToken = new MockWETH();
+
+        bytes memory initData = abi.encodeWithSelector(
+            Pausable4626Vault.initialize.selector,
+            address(otherToken), // Different asset
+            "Other Vault",
+            "OTHER",
+            owner,
+            address(strategyManager),
+            fulfiller
+        );
+        ERC1967Proxy proxy = new ERC1967Proxy(address(vaultImpl), initData);
+        Pausable4626Vault otherVault = Pausable4626Vault(
+            payable(address(proxy))
+        );
+
+        uint256 ethAmount = 5 ether;
+        vm.deal(user1, ethAmount);
+
+        uint256 vaultEthBefore = address(otherVault).balance;
+
+        // Send ETH to vault with non-WETH asset
+        vm.prank(user1);
+        (bool success, ) = address(otherVault).call{value: ethAmount}("");
+        assertTrue(success);
+
+        // ETH should just stay in the vault (no auto-deposit)
+        assertEq(address(otherVault).balance, vaultEthBefore + ethAmount);
+
+        // No shares should be minted
+        assertEq(otherVault.balanceOf(user1), 0);
+        assertEq(otherVault.totalSupply(), 0);
+    }
+
+    function test_EthAutoDeposit_EmitsDepositEvent() public {
+        uint256 ethAmount = 5 ether;
+        vm.deal(user1, ethAmount);
+
+        // Expect Deposit event to be emitted
+        vm.expectEmit(true, true, false, true);
+        emit Deposit(user1, user1, ethAmount, ethAmount);
+
+        vm.prank(user1);
+        (bool success, ) = address(vault).call{value: ethAmount}("");
+        assertTrue(success);
+    }
+    event Deposit(
+        address indexed caller,
+        address indexed owner,
+        uint256 assets,
+        uint256 shares
+    );
 }
