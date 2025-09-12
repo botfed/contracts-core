@@ -5,6 +5,9 @@ import {Test} from "forge-std/Test.sol";
 import {console} from "forge-std/console.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+import {IERC20Errors} from "@openzeppelin/contracts/interfaces/draft-IERC6093.sol";
+
 
 import {Pausable4626Vault} from "../src/Pausable4626Vault.sol";
 import {StrategyManager} from "../src/StrategyManager.sol";
@@ -146,12 +149,9 @@ contract Pausable4626VaultTest is Test {
         vault.setUserWhiteList(user2, true);
         vm.stopPrank();
 
-
-
         // Set vault in strategy manager
         vm.prank(owner);
         strategyManager.setVault(address(vault));
-        
 
         // Get withdrawNFT reference
         withdrawNFT = vault.withdrawNFT();
@@ -299,6 +299,24 @@ contract Pausable4626VaultTest is Test {
     }
 
     // ============ WITHDRAWAL REQUEST TESTS ============
+    function test_RequestWithdrawTooManyAssets() public {
+        // First deposit
+        vm.startPrank(user1);
+        weth.approve(address(vault), 10 ether);
+        vault.deposit(10 ether, user1);
+
+        // Approve vault to spend shares for withdrawal request
+        vault.approve(address(vault), 15 ether);
+
+        vm.expectRevert(abi.encodeWithSelector(IERC20Errors.ERC20InsufficientBalance.selector, user1, 10 ether, 15 ether));
+
+        // Request withdrawal
+        (uint256 requestId, uint256 shares) = vault.requestWithdrawAssets(
+            15 ether,
+            user1
+        );
+        vm.stopPrank();
+    }
 
     function test_RequestWithdrawAssets() public {
         // First deposit
