@@ -184,7 +184,8 @@ contract Pausable4626VaultTest is Test {
             "TEST",
             owner,
             address(strategyManager),
-            fulfiller
+            fulfiller,
+            riskAdmin
         );
     }
 
@@ -232,7 +233,8 @@ contract Pausable4626VaultTest is Test {
             "TEST",
             owner,
             address(0), // No manager
-            fulfiller
+            fulfiller,
+            riskAdmin
         );
 
         ERC1967Proxy proxy = new ERC1967Proxy(address(vaultImpl), initData);
@@ -877,9 +879,15 @@ contract Pausable4626VaultTest is Test {
     }
 
     function test_UserWhiteListActive() public {
-        vm.prank(owner);
+        vm.prank(riskAdmin);
         vault.setUserWhiteListActive(false);
         assertFalse(vault.userWhiteListActive());
+    }
+    function test_UserWhiteListActiveRevert() public {
+        vm.startPrank(user1);
+        vm.expectRevert(bytes("ORA"));
+        vault.setUserWhiteListActive(false);
+        vm.stopPrank();
     }
 
     event Deposit(

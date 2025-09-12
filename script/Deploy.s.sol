@@ -29,6 +29,7 @@ contract DeployScript is Script {
         address treasury; // Treasury address for fees
         address exec; // Executor address
         address fulfiller; // Fulfiller address for vault
+        address riskAdmin; // riskAdmin address for vault
         string vaultName; // Vault token name
         string vaultSymbol; // Vault token symbol
     }
@@ -85,7 +86,8 @@ contract DeployScript is Script {
                 config.vaultSymbol,
                 config.owner,
                 address(strategyManagerProxy),
-                config.fulfiller
+                config.fulfiller,
+                config.riskAdmin
             )
         );
 
@@ -160,6 +162,7 @@ contract DeployScript is Script {
         address treasury = vm.envOr("TREASURY", deployer);
         address exec = vm.envOr("EXEC", deployer);
         address fulfiller = vm.envOr("FULFILLER", deployer);
+        address riskAdmin = vm.envOr("RISK_ADMIN", deployer);
         address asset = vm.envOr("ASSET", WETH_BASE);
 
         return
@@ -169,6 +172,7 @@ contract DeployScript is Script {
                 treasury: treasury,
                 exec: exec,
                 fulfiller: fulfiller,
+                riskAdmin: riskAdmin,
                 vaultName: vm.envOr("VAULT_NAME", string("botfedETH")),
                 vaultSymbol: vm.envOr("VAULT_SYMBOL", string("botfedETH"))
             });
