@@ -50,6 +50,7 @@ contract Pausable4626Vault is
     WithdrawRequestNFT public withdrawNFT;
 
     address public fulfiller;
+    address public riskAdmin;
     IStrategyManager public manager;
 
     bool public userWhiteListActive;
@@ -78,10 +79,12 @@ contract Pausable4626Vault is
         string memory symbol_,
         address initialOwner,
         address manager_,
-        address fulfiller_
+        address fulfiller_,
+        address riskAdmin_
     ) public initializer {
         manager = IStrategyManager(manager_);
         fulfiller = fulfiller_;
+        riskAdmin = riskAdmin_;
         withdrawNFT = new WithdrawRequestNFT("Withdraw Request", "wREQ");
         userWhiteListActive = true;
 
@@ -96,6 +99,7 @@ contract Pausable4626Vault is
     /* -- Strategy functions --- */
     event ManagerSet(address indexed a);
     event FulfillerSet(address indexed a);
+    event RiskAdminSet(address indexed a);
     event CapitalDeployed(address strat, uint256 amount);
     event RequestCreated(
         uint256 indexed id,
@@ -138,15 +142,20 @@ contract Pausable4626Vault is
         emit FulfillerSet(a);
     }
 
+    function setRiskAdmin(address a) external onlyOwner {
+        require(a != address(0), "ZF");
+        riskAdmin = a;
+        emit RiskAdminSet(a);
+    }
     function setUserWhiteList(
         address a,
         bool isWhiteListed
-    ) external onlyFulfiller {
+    ) external onlyRiskAdmin {
         userWhiteList[a] = isWhiteListed;
         emit UserWhiteList(a, isWhiteListed);
     }
 
-    function setUserWhiteListActive(bool b) external onlyFulfiller {
+    function setUserWhiteListActive(bool b) external onlyRiskAdmin {
         userWhiteListActive = b;
         emit UserWhiteListActive(b);
     }
@@ -159,7 +168,11 @@ contract Pausable4626Vault is
     /* ---- modifiers --- */
 
     modifier onlyFulfiller() {
-        require(msg.sender == fulfiller || msg.sender == owner(), "OF");
+        require(msg.sender == fulfiller, "OF");
+        _;
+    }
+    modifier onlyRiskAdmin() {
+        require(msg.sender == riskAdmin, "ORA");
         _;
     }
     modifier onlyWhiteListed() {

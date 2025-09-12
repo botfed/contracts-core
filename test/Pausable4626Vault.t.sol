@@ -115,6 +115,7 @@ contract Pausable4626VaultTest is Test {
     address public user1 = makeAddr("user1");
     address public user2 = makeAddr("user2");
     address public fulfiller = makeAddr("fulfiller");
+    address public riskAdmin = makeAddr("riskAdmin");
     address public treasury = makeAddr("treasury");
     address public exec = makeAddr("exec");
 
@@ -138,13 +139,14 @@ contract Pausable4626VaultTest is Test {
             "botETH",
             owner,
             address(strategyManager),
-            fulfiller
+            fulfiller,
+            riskAdmin
         );
 
         ERC1967Proxy proxy = new ERC1967Proxy(address(vaultImpl), initData);
         vault = Pausable4626Vault(payable(address(proxy)));
 
-        vm.startPrank(owner);
+        vm.startPrank(riskAdmin);
         vault.setUserWhiteList(user1, true);
         vault.setUserWhiteList(user2, true);
         vm.stopPrank();
@@ -236,7 +238,7 @@ contract Pausable4626VaultTest is Test {
         ERC1967Proxy proxy = new ERC1967Proxy(address(vaultImpl), initData);
         Pausable4626Vault newVault = Pausable4626Vault(payable(address(proxy)));
 
-        vm.prank(owner);
+        vm.prank(riskAdmin);
         newVault.setUserWhiteList(user1, true);
 
         vm.startPrank(user1);
@@ -869,7 +871,7 @@ contract Pausable4626VaultTest is Test {
     function test_UserWhiteList() public {
         address user = makeAddr("testuser1");
         assertFalse(vault.userIsWhitelisted(user));
-        vm.prank(owner);
+        vm.prank(riskAdmin);
         vault.setUserWhiteList(user, true);
         assertTrue(vault.userIsWhitelisted(user));
     }
