@@ -141,9 +141,17 @@ contract Pausable4626VaultTest is Test {
         ERC1967Proxy proxy = new ERC1967Proxy(address(vaultImpl), initData);
         vault = Pausable4626Vault(payable(address(proxy)));
 
+        vm.startPrank(owner);
+        vault.setUserWhiteList(user1, true);
+        vault.setUserWhiteList(user2, true);
+        vm.stopPrank();
+
+
+
         // Set vault in strategy manager
         vm.prank(owner);
         strategyManager.setVault(address(vault));
+        
 
         // Get withdrawNFT reference
         withdrawNFT = vault.withdrawNFT();
@@ -227,6 +235,9 @@ contract Pausable4626VaultTest is Test {
 
         ERC1967Proxy proxy = new ERC1967Proxy(address(vaultImpl), initData);
         Pausable4626Vault newVault = Pausable4626Vault(payable(address(proxy)));
+
+        vm.prank(owner);
+        newVault.setUserWhiteList(user1, true);
 
         vm.startPrank(user1);
         weth.approve(address(newVault), 10 ether);
@@ -836,6 +847,21 @@ contract Pausable4626VaultTest is Test {
         (bool success, ) = address(vault).call{value: ethAmount}("");
         assertTrue(success);
     }
+
+    function test_UserWhiteList() public {
+        address user = makeAddr("testuser1");
+        assertFalse(vault.userIsWhitelisted(user));
+        vm.prank(owner);
+        vault.setUserWhiteList(user, true);
+        assertTrue(vault.userIsWhitelisted(user));
+    }
+
+    function test_UserWhiteListActive() public {
+        vm.prank(owner);
+        vault.setUserWhiteListActive(false);
+        assertFalse(vault.userWhiteListActive());
+    }
+
     event Deposit(
         address indexed caller,
         address indexed owner,

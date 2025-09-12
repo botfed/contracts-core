@@ -38,10 +38,6 @@ contract Pausable4626Vault is
 
     address public immutable WETH;
 
-    IStrategyManager public manager;
-    WithdrawRequestNFT public withdrawNFT;
-    address public fulfiller;
-
     /* ---------- requests ---------- */
     struct Req {
         uint128 shares; // shares escrowed in the vault
@@ -50,6 +46,15 @@ contract Pausable4626Vault is
         bool settled; // fulfilled or canceled
         bool claimed; // fulfilled or canceled
     }
+
+    WithdrawRequestNFT public withdrawNFT;
+
+    address public fulfiller;
+    IStrategyManager public manager;
+
+    bool public userWhiteListActive;
+    mapping(address => bool) public userWhiteList;
+
     mapping(uint256 => Req) public requests;
     uint256 public nextReqId;
     uint256 public amtRequested;
@@ -78,6 +83,7 @@ contract Pausable4626Vault is
         manager = IStrategyManager(manager_);
         fulfiller = fulfiller_;
         withdrawNFT = new WithdrawRequestNFT("Withdraw Request", "wREQ");
+        userWhiteListActive = true;
 
         __ERC20_init(name_, symbol_);
         __ERC4626_init(asset_);
@@ -110,6 +116,8 @@ contract Pausable4626Vault is
         uint256 assetsOut
     );
     event EmergencyWithdraw(address indexed token, uint256 amount);
+    event UserWhiteList(address indexed user, bool isWhiteListed);
+    event UserWhiteListActive(bool isActive);
 
     /* ---------- errors ---------- */
     error Disabled();
@@ -130,10 +138,32 @@ contract Pausable4626Vault is
         emit FulfillerSet(a);
     }
 
+    function setUserWhiteList(
+        address a,
+        bool isWhiteListed
+    ) external onlyFulfiller {
+        userWhiteList[a] = isWhiteListed;
+        emit UserWhiteList(a, isWhiteListed);
+    }
+
+    function setUserWhiteListActive(bool b) external onlyFulfiller {
+        userWhiteListActive = b;
+        emit UserWhiteListActive(b);
+    }
+
+    /* -- some getters */
+    function userIsWhitelisted(address a) external view returns (bool) {
+        return userWhiteList[a];
+    }
+
     /* ---- modifiers --- */
 
     modifier onlyFulfiller() {
-        require(msg.sender == fulfiller, "OF");
+        require(msg.sender == fulfiller || msg.sender == owner(), "OF");
+        _;
+    }
+    modifier onlyWhiteListed() {
+        require(!userWhiteListActive || userWhiteList[msg.sender], "OWL");
         _;
     }
 
@@ -159,12 +189,19 @@ contract Pausable4626Vault is
     function deposit(
         uint256 assets,
         address receiver
-    ) public override whenNotPaused nonReentrant returns (uint256 shares) {
+    )
+        public
+        override
+        whenNotPaused
+        nonReentrant
+        onlyWhiteListed
+        returns (uint256 shares)
+    {
         require(address(manager) != address(0), "manager not set");
         // 1:1 → shares == assets
         shares = assets;
         // pull assets in
-        IERC20(asset()).transferFrom(msg.sender, address(this), assets);
+        IERC20(asset()).safeTransferFrom(msg.sender, address(this), assets);
         // mint shares
         _mint(receiver, shares);
 
@@ -247,8 +284,7 @@ contract Pausable4626Vault is
         uint256 assets,
         address receiver
     ) external whenNotPaused returns (uint256 id, uint256 shares) {
-        shares = previewWithdraw(assets);
-        return _request(shares, receiver);
+        return _request(assets, receiver);
     }
 
     function _request(
