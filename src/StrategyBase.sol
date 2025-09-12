@@ -26,12 +26,10 @@ abstract contract StrategyBaseUpgradeable is
     using SafeERC20 for IERC20;
 
     IERC20 public assetToken; // e.g., WETH
-    address public treasury; // StrategyVaultManager
     address public manager; // StrategyVaultManager
     address public executor; // keeper/bot
     address public riskAdmin; // keeper/bot
 
-    event TreasurySet(address indexed treasury);
     event ManagerSet(address indexed manager);
     event RiskAdminSet(address indexed riskAdmin);
     event ExecutorSet(address indexed executor);
@@ -46,20 +44,17 @@ abstract contract StrategyBaseUpgradeable is
 
     function initialize(
         address owner_,
-        address treasury_,
         address manager_,
         address riskAdmin_,
         address executor_,
         IERC20 asset_
     ) public initializer {
         require(owner_ != address(0), "owner=0");
-        require(treasury_ != address(0), "treasury=0");
         require(manager_ != address(0), "manager=0");
         require(riskAdmin_ != address(0), "riskAdmin=0");
         require(executor_ != address(0), "executor=0");
         require(address(asset_) != address(0), "asset=0");
 
-        treasury = treasury_;
         manager = manager_;
         executor = executor_;
         riskAdmin = riskAdmin_;
@@ -69,7 +64,6 @@ abstract contract StrategyBaseUpgradeable is
         __UUPSUpgradeable_init();
         __ReentrancyGuard_init();
 
-        emit TreasurySet(riskAdmin);
         emit RiskAdminSet(riskAdmin);
         emit ManagerSet(manager_);
         emit ExecutorSet(executor_);
@@ -111,12 +105,6 @@ abstract contract StrategyBaseUpgradeable is
         emit ManagerSet(a);
     }
 
-    function setTreasury(address a) external onlyOwner {
-        require(a != address(0), "treasury=0");
-        treasury = a;
-        emit TreasurySet(a);
-    }
-
     /* -------------------- manager withdrawals -------------------- */
     /// @notice Manager pulls `assets` of the strategy's asset to `recipient`.
     function withdrawToManager(
@@ -128,17 +116,18 @@ abstract contract StrategyBaseUpgradeable is
         emit Withdrawn(manager, withdrawn);
     }
 
-    /* -------------------- emergencies (owner/executor) -------------------- */
-    function emergencyWithdrawToken(
+    // manual escape hatch to manager that can be called by exectuor
+
+    function withdrawToManager(
         address token,
         uint256 amount
     ) external onlyExecutorOrGov nonReentrant {
         if (token == address(0)) {
-            (bool ok, ) = payable(treasury).call{value: amount}("");
+            (bool ok, ) = payable(manager).call{value: amount}("");
             require(ok, "ETH xfer fail");
             emit EmergencyWithdraw(address(0), amount);
         } else {
-            IERC20(token).safeTransfer(treasury, amount);
+            IERC20(token).safeTransfer(manager, amount);
             emit EmergencyWithdraw(token, amount);
         }
     }
