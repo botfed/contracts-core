@@ -343,7 +343,7 @@ contract Pausable4626VaultTest is Test {
 
         // Check request details
         (
-            uint128 reqShares,
+            uint256 reqShares,
             address receiver,
             address reqOwner,
             bool settled,
@@ -832,12 +832,15 @@ contract Pausable4626VaultTest is Test {
             "OTHER",
             owner,
             address(strategyManager),
-            fulfiller
+            fulfiller,
+            riskAdmin
         );
         ERC1967Proxy proxy = new ERC1967Proxy(address(vaultImpl), initData);
         Pausable4626Vault otherVault = Pausable4626Vault(
             payable(address(proxy))
         );
+        vm.prank(riskAdmin);
+        otherVault.setUserWhiteList(user1, true);
 
         uint256 ethAmount = 5 ether;
         vm.deal(user1, ethAmount);

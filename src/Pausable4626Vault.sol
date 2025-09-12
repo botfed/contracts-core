@@ -40,7 +40,7 @@ contract Pausable4626Vault is
 
     /* ---------- requests ---------- */
     struct Req {
-        uint128 shares; // shares escrowed in the vault
+        uint256 shares; // shares escrowed in the vault
         address receiver; // payout receiver
         address owner; // payout receiver
         bool settled; // fulfilled or canceled
@@ -83,6 +83,7 @@ contract Pausable4626Vault is
         address riskAdmin_
     ) public initializer {
         manager = IStrategyManager(manager_);
+        require(manager.asset() == asset_, "Asset mismatch");
         fulfiller = fulfiller_;
         riskAdmin = riskAdmin_;
         withdrawNFT = new WithdrawRequestNFT("Withdraw Request", "wREQ");
@@ -143,7 +144,7 @@ contract Pausable4626Vault is
     }
 
     function setRiskAdmin(address a) external onlyOwner {
-        require(a != address(0), "ZF");
+        require(a != address(0), "ZRA");
         riskAdmin = a;
         emit RiskAdminSet(a);
     }
@@ -212,14 +213,16 @@ contract Pausable4626Vault is
     {
         require(address(manager) != address(0), "manager not set");
         // 1:1 → shares == assets
-        shares = assets;
+        uint256 bal0 = IERC20(asset()).balanceOf(address(this));
         // pull assets in
         IERC20(asset()).safeTransferFrom(msg.sender, address(this), assets);
+        shares = IERC20(asset()).balanceOf(address(this)) - bal0;
+        require(shares == assets, 'RAM');
         // mint shares
         _mint(receiver, shares);
 
         // kick capital to manager
-        _pushToManager(assets);
+        _pushToManager(shares);
     }
 
     // 1:1 conversions
@@ -313,7 +316,7 @@ contract Pausable4626Vault is
         // 2) record request
         id = ++nextReqId;
         requests[id] = Req({
-            shares: uint128(_shares),
+            shares: _shares,
             owner: msg.sender,
             receiver: receiver == address(0) ? msg.sender : receiver,
             settled: false,
@@ -349,7 +352,7 @@ contract Pausable4626Vault is
 
         // burn escrowed shares and send assets
         _burn(address(this), shares);
-        IERC20(asset()).transfer(r.receiver, shares);
+        IERC20(asset()).safeTransfer(r.receiver, shares);
         amtRequested -= shares;
         emit RequestClaimed(id, r.owner, r.receiver, shares);
     }
@@ -398,13 +401,14 @@ contract Pausable4626Vault is
     }
 
     // Replace the existing receive() function with this:
-    receive() external payable {
+    receive() external payable nonReentrant onlyWhiteListed whenNotPaused {
         // If no ETH sent, do nothing
         if (msg.value == 0) return;
 
+        if (address(asset()) != WETH) revert("ETH disabled");
+
         if (address(asset()) == WETH) {
             require(address(manager) != address(0), "manager not set");
-            require(!paused(), "deposits paused");
 
             // Wrap ETH to WETH
             IWETH(WETH).deposit{value: msg.value}();
