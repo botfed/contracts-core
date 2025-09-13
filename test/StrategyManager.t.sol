@@ -812,7 +812,7 @@ contract StrategyManagerTest is Test {
         emit EmergencyWithdraw(address(emergencyToken), amount);
 
         vm.prank(exec);
-        strategyManager.emergencyWithdrawToken(address(emergencyToken), amount);
+        strategyManager.forceSweepToTreasury(address(emergencyToken), amount);
 
         assertEq(
             emergencyToken.balanceOf(treasury),
@@ -832,7 +832,7 @@ contract StrategyManagerTest is Test {
         emit EmergencyWithdraw(address(0), amount);
 
         vm.prank(exec);
-        strategyManager.emergencyWithdrawToken(address(0), amount);
+        strategyManager.forceSweepToTreasury(address(0), amount);
 
         assertEq(treasury.balance, initialTreasuryBalance + amount);
     }
@@ -842,7 +842,7 @@ contract StrategyManagerTest is Test {
         uint256 initialTreasuryBalance = asset.balanceOf(treasury);
 
         vm.prank(exec);
-        strategyManager.emergencyWithdrawToken(address(asset), amount);
+        strategyManager.forceSweepToTreasury(address(asset), amount);
 
         assertEq(asset.balanceOf(treasury), initialTreasuryBalance + amount);
     }
@@ -1075,7 +1075,7 @@ contract StrategyManagerTest is Test {
         uint256 treasuryBalance = asset.balanceOf(treasury);
 
         vm.prank(exec);
-        strategyManager.emergencyWithdrawToken(address(asset), managerBalance);
+        strategyManager.forceSweepToTreasury(address(asset), managerBalance);
 
         assertEq(asset.balanceOf(treasury), treasuryBalance + managerBalance);
         assertEq(asset.balanceOf(address(strategyManager)), 0);
@@ -1164,7 +1164,7 @@ contract StrategyManagerTest is Test {
             strategyManager.pushToStrategy(address(mockStrategy1), 100e18);
 
             vm.expectRevert(bytes("OE"));
-            strategyManager.emergencyWithdrawToken(address(asset), 100e18);
+            strategyManager.forceSweepToTreasury(address(asset), 100e18);
 
             // Vault-only functions
             vm.expectRevert(bytes("OE"));
