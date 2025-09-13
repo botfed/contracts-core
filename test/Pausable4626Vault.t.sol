@@ -931,6 +931,11 @@ contract Pausable4626VaultTest is Test {
         uint256 bal1 = vault.balanceOf(minter);
         assertEq(bal1 - bal0, 1000 ether);
     }
+    function test_setMinter() public {
+        vm.prank(owner);
+        vault.setMinter(makeAddr("newMinter"));
+        assertEq(vault.minter(), makeAddr("newMinter"));
+    }
     function test_Mint_NoAUTH() public {
         vm.startPrank(user1);
         vm.expectRevert(bytes("OM"));
