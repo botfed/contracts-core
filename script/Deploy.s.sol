@@ -30,6 +30,7 @@ contract DeployScript is Script {
         address exec; // Executor address
         address fulfiller; // Fulfiller address for vault
         address riskAdmin; // riskAdmin address for vault
+        address minter; // riskAdmin address for vault
         string vaultName; // Vault token name
         string vaultSymbol; // Vault token symbol
     }
@@ -68,7 +69,7 @@ contract DeployScript is Script {
         console.log("Deploying StrategyManager proxy...");
         bytes memory strategyManagerInitData = abi.encodeCall(
             StrategyManager.initialize,
-            (IERC20(config.asset), config.owner, config.treasury, config.exec)
+            (IERC20(config.asset), deployer, config.treasury, config.exec)
         );
 
         ERC1967Proxy strategyManagerProxy = new ERC1967Proxy(
@@ -87,7 +88,8 @@ contract DeployScript is Script {
                 config.owner,
                 address(strategyManagerProxy),
                 config.fulfiller,
-                config.riskAdmin
+                config.riskAdmin,
+                config.minter
             )
         );
 
@@ -100,6 +102,9 @@ contract DeployScript is Script {
         console.log("Setting vault address in StrategyManager...");
         StrategyManager(payable(address(strategyManagerProxy))).setVault(
             address(vaultProxy)
+        );
+        StrategyManager(payable(address(strategyManagerProxy))).transferOwnership(
+            config.owner
         );
 
         vm.stopBroadcast();
@@ -158,12 +163,13 @@ contract DeployScript is Script {
         address deployer
     ) internal view returns (DeployConfig memory) {
         // Try to get config from environment variables, default to deployer
-        address owner = vm.envOr("OWNER", deployer);
-        address treasury = vm.envOr("TREASURY", deployer);
-        address exec = vm.envOr("EXEC", deployer);
-        address fulfiller = vm.envOr("FULFILLER", deployer);
-        address riskAdmin = vm.envOr("RISK_ADMIN", deployer);
-        address asset = vm.envOr("ASSET", WETH_BASE);
+        address owner = vm.envAddress("BF_GOV");
+        address treasury = vm.envAddress("BF_TREASURY");
+        address fulfiller = vm.envAddress("BF_FULFILLER");
+        address riskAdmin = vm.envAddress("BF_RISK_ADMIN");
+        address minter = vm.envAddress("BF_MINTER");
+        address exec = vm.envAddress("BF_STRAT_MANAGER_EXEC");
+        address asset = vm.envAddress("ASSET");
 
         return
             DeployConfig({
@@ -173,6 +179,7 @@ contract DeployScript is Script {
                 exec: exec,
                 fulfiller: fulfiller,
                 riskAdmin: riskAdmin,
+                minter: minter,
                 vaultName: vm.envOr("VAULT_NAME", string("botfedETH")),
                 vaultSymbol: vm.envOr("VAULT_SYMBOL", string("botfedETH"))
             });

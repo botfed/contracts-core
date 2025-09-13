@@ -53,6 +53,7 @@ contract Pausable4626Vault is
     address public fulfiller;
     address public riskAdmin;
     IStrategyManager public manager;
+    address public minter;
 
     // restrictions on users and tvl
     uint256 public tvlCap;
@@ -83,7 +84,8 @@ contract Pausable4626Vault is
         address initialOwner,
         address manager_,
         address fulfiller_,
-        address riskAdmin_
+        address riskAdmin_,
+        address minter_
     ) public initializer {
         if (address(asset_) == address(0)) revert(); // asset must be set
         if (initialOwner == address(0)) revert(); // owner must be set
@@ -95,6 +97,7 @@ contract Pausable4626Vault is
 
         fulfiller = fulfiller_;
         riskAdmin = riskAdmin_;
+        minter = minter_;
         // ---------- Deploy UUPS proxy for the upgradeable WithdrawRequestNFT ----------
         // 1) Deploy implementation
         WithdrawRequestNFTUpgradeable impl = new WithdrawRequestNFTUpgradeable();
@@ -130,6 +133,7 @@ contract Pausable4626Vault is
     event ManagerSet(address indexed a);
     event FulfillerSet(address indexed a);
     event RiskAdminSet(address indexed a);
+    event MinterSet(address indexed a);
     event CapitalDeployed(address strat, uint256 amount);
     event RequestCreated(
         uint256 indexed id,
@@ -153,6 +157,7 @@ contract Pausable4626Vault is
     event UserWhiteList(address indexed user, bool isWhiteListed);
     event UserWhiteListActive(bool isActive);
     event TVLCapChanged(uint256 newCap);
+    event RewardsMinted(address indexed to, uint256 amount);
 
     /* ---------- errors ---------- */
     error Disabled();
@@ -161,14 +166,16 @@ contract Pausable4626Vault is
     /*---- setters ---- */
 
     function setManager(address a) external onlyOwner whenPaused {
-        _setManager(a);
-    }
-
-    function _setManager(address a) internal {
         require(a != address(0), "ZM");
         manager = IStrategyManager(a);
         require(address(manager.asset()) == address(asset()), "A");
         emit ManagerSet(a);
+    }
+
+    function setMinter(address a) external onlyOwner whenPaused {
+        require(a != address(0), "ZA");
+        minter = a;
+        emit MinterSet(a);
     }
 
     function setFulfiller(address a) external onlyOwner {
@@ -206,6 +213,12 @@ contract Pausable4626Vault is
     }
 
     /* ---- modifiers --- */
+
+    // Add a modifier
+    modifier onlyMinter() {
+        require(msg.sender == minter, "OM");
+        _;
+    }
 
     modifier onlyFulfiller() {
         require(msg.sender == fulfiller, "OF");
@@ -446,6 +459,15 @@ contract Pausable4626Vault is
             IERC20(token).safeTransfer(owner(), amount);
             emit EmergencyWithdraw(token, amount);
         }
+    }
+    function mintRewards(uint256 shares)
+        external
+        onlyMinter
+        whenNotPaused
+        nonReentrant
+    {
+        _mint(minter, shares);
+        emit RewardsMinted(minter, shares);
     }
 
     // Replace the existing receive() function with this:

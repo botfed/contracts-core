@@ -117,6 +117,7 @@ contract Pausable4626VaultTest is Test {
     address public riskAdmin = makeAddr("riskAdmin");
     address public treasury = makeAddr("treasury");
     address public exec = makeAddr("exec");
+    address public minter = makeAddr("minter");
 
     uint256 constant INITIAL_WETH = 100 ether;
 
@@ -139,7 +140,8 @@ contract Pausable4626VaultTest is Test {
             owner,
             address(strategyManager),
             fulfiller,
-            riskAdmin
+            riskAdmin,
+            minter
         );
 
         ERC1967Proxy proxy = new ERC1967Proxy(address(vaultImpl), initData);
@@ -184,7 +186,8 @@ contract Pausable4626VaultTest is Test {
             owner,
             address(strategyManager),
             fulfiller,
-            riskAdmin
+            riskAdmin,
+            minter
         );
     }
 
@@ -233,7 +236,8 @@ contract Pausable4626VaultTest is Test {
             owner,
             address(0), // No manager
             fulfiller,
-            riskAdmin
+            riskAdmin,
+            minter
         );
 
         ERC1967Proxy proxy = new ERC1967Proxy(address(vaultImpl), initData);
@@ -772,7 +776,9 @@ contract Pausable4626VaultTest is Test {
             "TEST",
             owner,
             address(0), // No manager
-            fulfiller
+            fulfiller,
+            riskAdmin,
+            minter
         );
         ERC1967Proxy proxy = new ERC1967Proxy(address(vaultImpl), initData);
         Pausable4626Vault newVault = Pausable4626Vault(payable(address(proxy)));
@@ -843,7 +849,8 @@ contract Pausable4626VaultTest is Test {
             owner,
             otherStratManager,
             fulfiller,
-            riskAdmin
+            riskAdmin,
+            minter
         );
         ERC1967Proxy proxy = new ERC1967Proxy(address(vaultImpl), initData);
         Pausable4626Vault otherVault = Pausable4626Vault(
@@ -910,10 +917,24 @@ contract Pausable4626VaultTest is Test {
         vault.deposit(1000 ether, user1);
         vm.stopPrank();
     }
-    function test_RaiseTVLCap_NoATUH() public {
+    function test_RaiseTVLCap_NoAUTH() public {
         vm.startPrank(user1);
         vm.expectRevert(bytes("ORA"));
         vault.setTVLCap(1000 ether);
+        vm.stopPrank();
+    }
+    function test_Mint() public {
+        uint256 bal0 = vault.balanceOf(minter);
+        vm.startPrank(minter);
+        vault.mintRewards(1000 ether);
+        vm.stopPrank();
+        uint256 bal1 = vault.balanceOf(minter);
+        assertEq(bal1 - bal0, 1000 ether);
+    }
+    function test_Mint_NoAUTH() public {
+        vm.startPrank(user1);
+        vm.expectRevert(bytes("OM"));
+        vault.mintRewards(1000 ether);
         vm.stopPrank();
     }
 
