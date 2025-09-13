@@ -195,7 +195,7 @@ contract StrategyManager is
     /* --------------------------- Admin ops -------------------------- */
 
     /* -------------------- emergencies (owner/executor) -------------------- */
-    function emergencyWithdrawToken(
+    function forceSweepToTreasury(
         address token,
         uint256 amount
     ) external onlyExec nonReentrant {
