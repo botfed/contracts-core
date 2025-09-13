@@ -217,7 +217,7 @@ contract Pausable4626Vault is
         // pull assets in
         IERC20(asset()).safeTransferFrom(msg.sender, address(this), assets);
         shares = IERC20(asset()).balanceOf(address(this)) - bal0;
-        require(shares == assets, 'RAM');
+        require(shares == assets, "RAM");
         // mint shares
         _mint(receiver, shares);
 
@@ -275,6 +275,14 @@ contract Pausable4626Vault is
     // Disable share-centric entry
     function maxMint(address) public pure override returns (uint256) {
         return 0;
+    }
+
+    function maxDeposit(
+        address account
+    ) public view override returns (uint256) {
+        if (paused()) return 0;
+        if (userWhiteListActive && !userWhiteList[account]) return 0;
+        return type(uint256).max;
     }
 
     function mint(uint256, address) public pure override returns (uint256) {
