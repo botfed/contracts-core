@@ -899,6 +899,23 @@ contract Pausable4626VaultTest is Test {
         vault.setUserWhiteListActive(false);
         vm.stopPrank();
     }
+    function test_RaiseTVLCap() public {
+        vm.prank(riskAdmin);
+        vault.setTVLCap(1000 ether);
+        assertEq(vault.tvlCap(), 1000 ether);
+    }
+    function test_DepositMoreThanTVLCap() public {
+        vm.startPrank(user1);
+        vm.expectRevert(bytes("tvl cap"));
+        vault.deposit(1000 ether, user1);
+        vm.stopPrank();
+    }
+    function test_RaiseTVLCap_NoATUH() public {
+        vm.startPrank(user1);
+        vm.expectRevert(bytes("ORA"));
+        vault.setTVLCap(1000 ether);
+        vm.stopPrank();
+    }
 
     event Deposit(
         address indexed caller,

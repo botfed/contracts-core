@@ -54,6 +54,8 @@ contract Pausable4626Vault is
     address public riskAdmin;
     IStrategyManager public manager;
 
+    // restrictions on users and tvl
+    uint256 public tvlCap;
     bool public userWhiteListActive;
     mapping(address => bool) public userWhiteList;
 
@@ -112,6 +114,7 @@ contract Pausable4626Vault is
         );
         // -------------------------------------
 
+        tvlCap = 32 ether;
         userWhiteListActive = true;
 
         // Initialize parent contracts
@@ -149,6 +152,7 @@ contract Pausable4626Vault is
     event EmergencyWithdraw(address indexed token, uint256 amount);
     event UserWhiteList(address indexed user, bool isWhiteListed);
     event UserWhiteListActive(bool isActive);
+    event TVLCapChanged(uint256 newCap);
 
     /* ---------- errors ---------- */
     error Disabled();
@@ -189,6 +193,11 @@ contract Pausable4626Vault is
     function setUserWhiteListActive(bool b) external onlyRiskAdmin {
         userWhiteListActive = b;
         emit UserWhiteListActive(b);
+    }
+
+    function setTVLCap(uint256 newCap) external onlyRiskAdmin {
+        tvlCap = newCap;
+        emit TVLCapChanged(newCap);
     }
 
     /* -- some getters */
@@ -242,6 +251,7 @@ contract Pausable4626Vault is
         returns (uint256 shares)
     {
         require(address(manager) != address(0), "manager not set");
+        require(totalSupply() + assets <= tvlCap, 'tvl cap');
         // 1:1 → shares == assets
         uint256 bal0 = IERC20(asset()).balanceOf(address(this));
         // pull assets in
