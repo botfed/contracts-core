@@ -8,10 +8,9 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {IERC20Errors} from "@openzeppelin/contracts/interfaces/draft-IERC6093.sol";
 
-
 import {Pausable4626Vault} from "../src/Pausable4626Vault.sol";
 import {StrategyManager} from "../src/StrategyManager.sol";
-import {WithdrawRequestNFT} from "../src/WithdrawRequestNFT.sol";
+import {WithdrawRequestNFTUpgradeable} from "../src/WithdrawRequestNFTUpgradeable.sol";
 
 // First, update your MockWETH to include the deposit function:
 contract MockWETH is IERC20 {
@@ -109,7 +108,7 @@ contract Pausable4626VaultTest is Test {
     Pausable4626Vault public vaultImpl;
     MockWETH public weth;
     MockStrategyManager public strategyManager;
-    WithdrawRequestNFT public withdrawNFT;
+    WithdrawRequestNFTUpgradeable public withdrawNFT;
 
     address public owner = makeAddr("owner");
     address public user1 = makeAddr("user1");
@@ -312,7 +311,14 @@ contract Pausable4626VaultTest is Test {
         // Approve vault to spend shares for withdrawal request
         vault.approve(address(vault), 15 ether);
 
-        vm.expectRevert(abi.encodeWithSelector(IERC20Errors.ERC20InsufficientBalance.selector, user1, 10 ether, 15 ether));
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IERC20Errors.ERC20InsufficientBalance.selector,
+                user1,
+                10 ether,
+                15 ether
+            )
+        );
 
         // Request withdrawal
         (uint256 requestId, uint256 shares) = vault.requestWithdrawAssets(
@@ -824,6 +830,10 @@ contract Pausable4626VaultTest is Test {
     function test_EthAutoDeposit_WithNonWETHAsset() public {
         // Deploy vault with a different asset (not WETH)
         MockWETH otherToken = new MockWETH();
+        // Deploy mock strategy manager
+        MockStrategyManager otherStratManager = new MockStrategyManager(
+            otherToken
+        );
 
         bytes memory initData = abi.encodeWithSelector(
             Pausable4626Vault.initialize.selector,
@@ -831,7 +841,7 @@ contract Pausable4626VaultTest is Test {
             "Other Vault",
             "OTHER",
             owner,
-            address(strategyManager),
+            otherStratManager,
             fulfiller,
             riskAdmin
         );
@@ -849,11 +859,8 @@ contract Pausable4626VaultTest is Test {
 
         // Send ETH to vault with non-WETH asset
         vm.prank(user1);
+        vm.expectRevert(bytes("ETH disabled"));
         (bool success, ) = address(otherVault).call{value: ethAmount}("");
-        assertTrue(success);
-
-        // ETH should just stay in the vault (no auto-deposit)
-        assertEq(address(otherVault).balance, vaultEthBefore + ethAmount);
 
         // No shares should be minted
         assertEq(otherVault.balanceOf(user1), 0);

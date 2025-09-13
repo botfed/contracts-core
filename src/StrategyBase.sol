@@ -118,7 +118,7 @@ abstract contract StrategyBaseUpgradeable is
 
     // manual escape hatch to manager that can be called by exectuor
 
-    function withdrawToManager(
+    function forceSweepToManager(
         address token,
         uint256 amount
     ) external onlyExecutorOrGov nonReentrant {
@@ -133,6 +133,7 @@ abstract contract StrategyBaseUpgradeable is
     }
 
     receive() external payable {}
+
     function onERC721Received(
         address,
         address,

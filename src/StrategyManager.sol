@@ -162,6 +162,7 @@ contract StrategyManager is
         uint256 amount
     ) external nonReentrant onlyExec {
         if (!isStrategy[strat]) revert UnknownStrategy();
+        if (amount == 0) revert ZeroAmount();
         asset.safeTransfer(strat, amount);
         strategyDeployed[strat] += amount;
         emit CapitalPushed(strat, amount);
@@ -178,7 +179,7 @@ contract StrategyManager is
         uint256 actualReceived = asset.balanceOf(address(this)) - balanceBefore;
         strategyWithdrawn[strat] += actualReceived;
         if (actualReceived < received) revert InconsistentReturn();
-        emit CapitalPulled(strat, requested, received);
+        emit CapitalPulled(strat, requested, actualReceived);
     }
 
     /// @notice Satisfy a withdrawal request by sending `amount` to `to`,

@@ -9,9 +9,10 @@ import {PausableUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/Pau
 import {ERC4626Upgradeable} from "@openzeppelin/contracts-upgradeable/token/ERC20/extensions/ERC4626Upgradeable.sol";
 import {ReentrancyGuardUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import {WithdrawRequestNFT} from "./WithdrawRequestNFT.sol";
 import {IStrategyManager} from "./StrategyManager.sol";
+import {WithdrawRequestNFTUpgradeable} from "./WithdrawRequestNFTUpgradeable.sol";
 
 // Add this interface at the top with other imports
 interface IWETH {
@@ -47,7 +48,7 @@ contract Pausable4626Vault is
         bool claimed; // fulfilled or canceled
     }
 
-    WithdrawRequestNFT public withdrawNFT;
+    WithdrawRequestNFTUpgradeable public withdrawNFT;
 
     address public fulfiller;
     address public riskAdmin;
@@ -82,13 +83,38 @@ contract Pausable4626Vault is
         address fulfiller_,
         address riskAdmin_
     ) public initializer {
-        manager = IStrategyManager(manager_);
-        require(manager.asset() == asset_, "Asset mismatch");
+        if (address(asset_) == address(0)) revert(); // asset must be set
+        if (initialOwner == address(0)) revert(); // owner must be set
+        if (manager_ != address(0)) {
+            IStrategyManager m = IStrategyManager(manager_);
+            require(m.asset() == asset_, "manager asset mismatch");
+            manager = m;
+        }
+
         fulfiller = fulfiller_;
         riskAdmin = riskAdmin_;
-        withdrawNFT = new WithdrawRequestNFT("Withdraw Request", "wREQ");
+        // ---------- Deploy UUPS proxy for the upgradeable WithdrawRequestNFT ----------
+        // 1) Deploy implementation
+        WithdrawRequestNFTUpgradeable impl = new WithdrawRequestNFTUpgradeable();
+
+        // 2) Encode initializer call for the proxy
+        bytes memory initCalldata = abi.encodeWithSelector(
+            WithdrawRequestNFTUpgradeable.initialize.selector,
+            "Withdraw Request", // name
+            "wREQ", // symbol
+            address(this), // vault_  (this vault is the minter/burner)
+            initialOwner // owner_  (upgrade/admin of the NFT)
+        );
+
+        // 3) Deploy ERC1967 proxy pointing to the implementation
+        withdrawNFT = WithdrawRequestNFTUpgradeable(
+            address(new ERC1967Proxy(address(impl), initCalldata))
+        );
+        // -------------------------------------
+
         userWhiteListActive = true;
 
+        // Initialize parent contracts
         __ERC20_init(name_, symbol_);
         __ERC4626_init(asset_);
         __Pausable_init();
@@ -131,6 +157,10 @@ contract Pausable4626Vault is
     /*---- setters ---- */
 
     function setManager(address a) external onlyOwner whenPaused {
+        _setManager(a);
+    }
+
+    function _setManager(address a) internal {
         require(a != address(0), "ZM");
         manager = IStrategyManager(a);
         require(address(manager.asset()) == address(asset()), "A");
