@@ -118,6 +118,7 @@ contract Pausable4626VaultTest is Test {
     address public treasury = makeAddr("treasury");
     address public exec = makeAddr("exec");
     address public minter = makeAddr("minter");
+    address public rewarder = makeAddr("rewarder");
 
     uint256 constant INITIAL_WETH = 100 ether;
 
@@ -141,7 +142,8 @@ contract Pausable4626VaultTest is Test {
             address(strategyManager),
             fulfiller,
             riskAdmin,
-            minter
+            minter,
+            rewarder
         );
 
         ERC1967Proxy proxy = new ERC1967Proxy(address(vaultImpl), initData);
@@ -187,7 +189,8 @@ contract Pausable4626VaultTest is Test {
             address(strategyManager),
             fulfiller,
             riskAdmin,
-            minter
+            minter,
+            rewarder
         );
     }
 
@@ -237,7 +240,8 @@ contract Pausable4626VaultTest is Test {
             address(0), // No manager
             fulfiller,
             riskAdmin,
-            minter
+            minter,
+            rewarder
         );
 
         ERC1967Proxy proxy = new ERC1967Proxy(address(vaultImpl), initData);
@@ -778,7 +782,8 @@ contract Pausable4626VaultTest is Test {
             address(0), // No manager
             fulfiller,
             riskAdmin,
-            minter
+            minter,
+            rewarder
         );
         ERC1967Proxy proxy = new ERC1967Proxy(address(vaultImpl), initData);
         Pausable4626Vault newVault = Pausable4626Vault(payable(address(proxy)));
@@ -850,7 +855,8 @@ contract Pausable4626VaultTest is Test {
             otherStratManager,
             fulfiller,
             riskAdmin,
-            minter
+            minter,
+            rewarder
         );
         ERC1967Proxy proxy = new ERC1967Proxy(address(vaultImpl), initData);
         Pausable4626Vault otherVault = Pausable4626Vault(
@@ -924,22 +930,47 @@ contract Pausable4626VaultTest is Test {
         vm.stopPrank();
     }
     function test_Mint() public {
-        uint256 bal0 = vault.balanceOf(minter);
+        uint256 bal0 = vault.balanceOf(rewarder);
         vm.startPrank(minter);
         vault.mintRewards(1000 ether);
         vm.stopPrank();
-        uint256 bal1 = vault.balanceOf(minter);
+        uint256 bal1 = vault.balanceOf(rewarder);
         assertEq(bal1 - bal0, 1000 ether);
     }
     function test_setMinter() public {
-        vm.prank(owner);
+        vm.startPrank(owner);
+        vault.pause();
         vault.setMinter(makeAddr("newMinter"));
+        vm.stopPrank();
         assertEq(vault.minter(), makeAddr("newMinter"));
+    }
+    function test_setMinter_NoAuth() public {
+        vm.prank(owner);
+        vault.pause();
+        vm.startPrank(user1);
+        vm.expectRevert();
+        vault.setMinter(makeAddr("newMinter"));
+        vm.stopPrank();
     }
     function test_Mint_NoAUTH() public {
         vm.startPrank(user1);
         vm.expectRevert(bytes("OM"));
         vault.mintRewards(1000 ether);
+        vm.stopPrank();
+    }
+    function test_setRewarder() public {
+        vm.startPrank(owner);
+        vault.pause();
+        vault.setMinter(makeAddr("newRewarder"));
+        vm.stopPrank();
+        assertEq(vault.minter(), makeAddr("newRewarder"));
+    }
+    function test_setRewarder_NoAuth() public {
+        vm.prank(owner);
+        vault.pause();
+        vm.startPrank(user1);
+        vm.expectRevert();
+        vault.setMinter(makeAddr("newRewarder"));
         vm.stopPrank();
     }
 

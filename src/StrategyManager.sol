@@ -17,12 +17,7 @@ interface IStrategyManager {
     function withdrawToVault(uint256 amt) external;
 }
 
-contract StrategyManager is
-    Initializable,
-    UUPSUpgradeable,
-    OwnableUpgradeable,
-    ReentrancyGuardUpgradeable
-{
+contract StrategyManager is Initializable, UUPSUpgradeable, OwnableUpgradeable, ReentrancyGuardUpgradeable {
     using SafeERC20 for IERC20;
 
     /* ------------------------- Config ------------------------- */
@@ -42,11 +37,7 @@ contract StrategyManager is
     event StrategyAdded(address indexed strat);
     event StrategyRemoved(address indexed strat);
     event CapitalPushed(address indexed strat, uint256 amount);
-    event CapitalPulled(
-        address indexed strat,
-        uint256 requested,
-        uint256 received
-    );
+    event CapitalPulled(address indexed strat, uint256 requested, uint256 received);
     event WithdrawnTo(address indexed to, uint256 amount);
     event SetVault(address indexed who);
     event SetTreasury(address indexed who);
@@ -75,12 +66,7 @@ contract StrategyManager is
         _disableInitializers();
     }
 
-    function initialize(
-        IERC20 asset_,
-        address owner_,
-        address treasury_,
-        address exec_
-    ) public initializer {
+    function initialize(IERC20 asset_, address owner_, address treasury_, address exec_) public initializer {
         require(address(asset_) != address(0), "asset=0");
         require(owner_ != address(0), "owner=0");
         require(treasury_ != address(0), "treasury=0");
@@ -157,10 +143,7 @@ contract StrategyManager is
     /* ---------------------- Capital movement --------------------- */
 
     /// @notice Push `amount` of `asset` to a strategy.
-    function pushToStrategy(
-        address strat,
-        uint256 amount
-    ) external nonReentrant onlyExec {
+    function pushToStrategy(address strat, uint256 amount) external nonReentrant onlyExec {
         if (!isStrategy[strat]) revert UnknownStrategy();
         if (amount == 0) revert ZeroAmount();
         asset.safeTransfer(strat, amount);
@@ -195,10 +178,7 @@ contract StrategyManager is
     /* --------------------------- Admin ops -------------------------- */
 
     /* -------------------- emergencies (owner/executor) -------------------- */
-    function forceSweepToTreasury(
-        address token,
-        uint256 amount
-    ) external onlyExec nonReentrant {
+    function forceSweepToTreasury(address token, uint256 amount) external onlyExec nonReentrant {
         if (token == address(0)) {
             (bool ok, ) = payable(treasury).call{value: amount}("");
             require(ok, "ETH xfer fail");
@@ -211,17 +191,12 @@ contract StrategyManager is
 
     /* --- Other convencience views --- */
     function strategyNetDeployed(address strat) external view returns (int256) {
-        return
-            int256(strategyDeployed[strat]) - int256(strategyWithdrawn[strat]);
+        return int256(strategyDeployed[strat]) - int256(strategyWithdrawn[strat]);
     }
-    function getStrategyDeployed(
-        address strat
-    ) external view returns (uint256) {
+    function getStrategyDeployed(address strat) external view returns (uint256) {
         return strategyDeployed[strat];
     }
-    function getStrategyWithdrawn(
-        address strat
-    ) external view returns (uint256) {
+    function getStrategyWithdrawn(address strat) external view returns (uint256) {
         return strategyWithdrawn[strat];
     }
 

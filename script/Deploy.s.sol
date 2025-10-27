@@ -8,7 +8,6 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {StrategyManager} from "../src/StrategyManager.sol";
 import {Pausable4626Vault} from "../src/Pausable4626Vault.sol";
 
-
 // Interface for WETH validation
 interface IERC20Extended {
     function symbol() external view returns (string memory);
@@ -16,11 +15,11 @@ interface IERC20Extended {
     function balanceOf(address) external view returns (uint256);
 }
 
+address constant WETH_BASE = 0x4200000000000000000000000000000000000006;
+address constant USDC_BASE = 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913;
 
 contract DeployScript is Script {
     // Base network addresses
-    address constant WETH_BASE = 0x4200000000000000000000000000000000000006;
-    address constant USDC_BASE = 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913;
 
     // Deployment configuration - UPDATE THESE
     struct DeployConfig {
@@ -30,7 +29,8 @@ contract DeployScript is Script {
         address exec; // Executor address
         address fulfiller; // Fulfiller address for vault
         address riskAdmin; // riskAdmin address for vault
-        address minter; // riskAdmin address for vault
+        address minter;
+        address rewarder;
         string vaultName; // Vault token name
         string vaultSymbol; // Vault token symbol
     }
@@ -50,8 +50,10 @@ contract DeployScript is Script {
         console.log("Config owner:", config.owner);
         console.log("Config treasury:", config.treasury);
 
-        // Validate WETH address
-        validateWETHAddress(WETH_BASE);
+        require(
+            config.asset == USDC_BASE || config.asset == WETH_BASE,
+            "Asset not USDC or WETH"
+        );
 
         vm.startBroadcast();
 
@@ -63,7 +65,7 @@ contract DeployScript is Script {
         StrategyManager strategyManagerImpl = new StrategyManager();
 
         console.log("Deploying Pausable4626Vault implementation...");
-        Pausable4626Vault vaultImpl = new Pausable4626Vault(WETH_BASE);
+        Pausable4626Vault vaultImpl = new Pausable4626Vault(config.asset);
 
         // Deploy StrategyManager proxy
         console.log("Deploying StrategyManager proxy...");
@@ -89,7 +91,8 @@ contract DeployScript is Script {
                 address(strategyManagerProxy),
                 config.fulfiller,
                 config.riskAdmin,
-                config.minter
+                config.minter,
+                config.rewarder
             )
         );
 
@@ -103,9 +106,8 @@ contract DeployScript is Script {
         StrategyManager(payable(address(strategyManagerProxy))).setVault(
             address(vaultProxy)
         );
-        StrategyManager(payable(address(strategyManagerProxy))).transferOwnership(
-            config.owner
-        );
+        StrategyManager(payable(address(strategyManagerProxy)))
+            .transferOwnership(config.owner);
 
         vm.stopBroadcast();
 
@@ -168,8 +170,19 @@ contract DeployScript is Script {
         address fulfiller = vm.envAddress("BF_FULFILLER");
         address riskAdmin = vm.envAddress("BF_RISK_ADMIN");
         address minter = vm.envAddress("BF_MINTER");
+        address rewarder = vm.envAddress("BF_REWARDER");
         address exec = vm.envAddress("BF_STRAT_MANAGER_EXEC");
         address asset = vm.envAddress("ASSET");
+
+        require(
+            asset == USDC_BASE || asset == WETH_BASE,
+            "Asset not USDC or WETH"
+        );
+
+        string memory vaultSymbol = (asset == WETH_BASE ? "botETH" : "botUSD");
+        string memory vaultName = (
+            asset == WETH_BASE ? "BotFed ETH" : "BotFed USD"
+        );
 
         return
             DeployConfig({
@@ -180,8 +193,9 @@ contract DeployScript is Script {
                 fulfiller: fulfiller,
                 riskAdmin: riskAdmin,
                 minter: minter,
-                vaultName: vm.envOr("VAULT_NAME", string("botfedETH")),
-                vaultSymbol: vm.envOr("VAULT_SYMBOL", string("botfedETH"))
+                rewarder: rewarder,
+                vaultName: vaultName,
+                vaultSymbol: vaultSymbol
             });
     }
     function validateWETHAddress(address wethAddr) internal view {
@@ -244,29 +258,38 @@ contract DeployScript is Script {
     }
 }
 
-// Separate script for upgrading contracts
-contract UpgradeScript is Script {
-    function upgradeStrategyManager(address proxy, address newImpl) external {
-        vm.startBroadcast();
+contract DeployStrategyManagerImpl is Script {
+    /// Env:
+    ///  - PRIVATE_KEY : uint256 (required)
+    function run() external {
+        uint256 pk = vm.envUint("PRIVATE_KEY");
 
-        StrategyManager(payable(proxy)).upgradeToAndCall(newImpl, "");
-
+        vm.startBroadcast(pk);
+        StrategyManager impl = new StrategyManager(); // constructor should _disableInitializers()
         vm.stopBroadcast();
 
-        console.log("StrategyManager upgraded:");
-        console.log("Proxy:", proxy);
-        console.log("New Implementation:", newImpl);
+        console.log("Deployed StrategyManager implementation:");
+        console.logAddress(address(impl));
     }
+}
 
-    function upgradeVault(address proxy, address newImpl) external {
-        vm.startBroadcast();
+contract DeployVaultImpl is Script {
+    // Deploy a vault implementation bound to the selected ASSET (WETH/USDC)
+    function run() external {
+        uint256 pk = vm.envUint("PRIVATE_KEY");
 
-        Pausable4626Vault(payable(proxy)).upgradeToAndCall(newImpl, "");
+        // Use same selection logic as main script
+        address asset = vm.envAddress("ASSET");
+        require(
+            asset == USDC_BASE || asset == WETH_BASE,
+            "Asset not USDC or WETH"
+        );
 
+        vm.startBroadcast(pk);
+        Pausable4626Vault impl = new Pausable4626Vault(asset);
         vm.stopBroadcast();
 
-        console.log("Pausable4626Vault upgraded:");
-        console.log("Proxy:", proxy);
-        console.log("New Implementation:", newImpl);
+        console.log("Deployed Vault implementation (asset-bound):");
+        console.logAddress(address(impl));
     }
 }

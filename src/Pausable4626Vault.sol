@@ -54,6 +54,7 @@ contract Pausable4626Vault is
     address public riskAdmin;
     IStrategyManager public manager;
     address public minter;
+    address public rewarder;
 
     // restrictions on users and tvl
     uint256 public tvlCap;
@@ -85,7 +86,8 @@ contract Pausable4626Vault is
         address manager_,
         address fulfiller_,
         address riskAdmin_,
-        address minter_
+        address minter_,
+        address rewarder_
     ) public initializer {
         if (address(asset_) == address(0)) revert(); // asset must be set
         if (initialOwner == address(0)) revert(); // owner must be set
@@ -98,9 +100,9 @@ contract Pausable4626Vault is
         fulfiller = fulfiller_;
         riskAdmin = riskAdmin_;
         minter = minter_;
+        rewarder = rewarder_;
         // ---------- Deploy UUPS proxy for the upgradeable WithdrawRequestNFT ----------
         // 1) Deploy implementation
-        WithdrawRequestNFTUpgradeable impl = new WithdrawRequestNFTUpgradeable();
 
         // 2) Encode initializer call for the proxy
         bytes memory initCalldata = abi.encodeWithSelector(
@@ -113,7 +115,7 @@ contract Pausable4626Vault is
 
         // 3) Deploy ERC1967 proxy pointing to the implementation
         withdrawNFT = WithdrawRequestNFTUpgradeable(
-            address(new ERC1967Proxy(address(impl), initCalldata))
+            address(new ERC1967Proxy(address(new WithdrawRequestNFTUpgradeable()), initCalldata))
         );
         // -------------------------------------
 
@@ -134,25 +136,11 @@ contract Pausable4626Vault is
     event FulfillerSet(address indexed a);
     event RiskAdminSet(address indexed a);
     event MinterSet(address indexed a);
+    event RewarderSet(address indexed a);
     event CapitalDeployed(address strat, uint256 amount);
-    event RequestCreated(
-        uint256 indexed id,
-        address indexed owner,
-        uint256 shares,
-        address receiver
-    );
-    event RequestClaimed(
-        uint256 indexed id,
-        address indexed owner,
-        address receiver,
-        uint256 shares
-    );
-    event RequestFulfilled(
-        uint256 indexed id,
-        address indexed owner,
-        address indexed receiver,
-        uint256 assetsOut
-    );
+    event RequestCreated(uint256 indexed id, address indexed owner, uint256 shares, address receiver);
+    event RequestClaimed(uint256 indexed id, address indexed owner, address receiver, uint256 shares);
+    event RequestFulfilled(uint256 indexed id, address indexed owner, address indexed receiver, uint256 assetsOut);
     event EmergencyWithdraw(address indexed token, uint256 amount);
     event UserWhiteList(address indexed user, bool isWhiteListed);
     event UserWhiteListActive(bool isActive);
@@ -178,6 +166,12 @@ contract Pausable4626Vault is
         emit MinterSet(a);
     }
 
+    function setRewarder(address a) external onlyOwner whenPaused {
+        require(a != address(0), "ZA");
+        rewarder = a;
+        emit RewarderSet(a);
+    }
+
     function setFulfiller(address a) external onlyOwner {
         require(a != address(0), "ZF");
         fulfiller = a;
@@ -189,10 +183,7 @@ contract Pausable4626Vault is
         riskAdmin = a;
         emit RiskAdminSet(a);
     }
-    function setUserWhiteList(
-        address a,
-        bool isWhiteListed
-    ) external onlyRiskAdmin {
+    function setUserWhiteList(address a, bool isWhiteListed) external onlyRiskAdmin {
         userWhiteList[a] = isWhiteListed;
         emit UserWhiteList(a, isWhiteListed);
     }
@@ -216,16 +207,16 @@ contract Pausable4626Vault is
 
     // Add a modifier
     modifier onlyMinter() {
-        require(msg.sender == minter, "OM");
+        require(msg.sender == minter || msg.sender == owner(), "OM");
         _;
     }
 
     modifier onlyFulfiller() {
-        require(msg.sender == fulfiller, "OF");
+        require(msg.sender == fulfiller || msg.sender == owner(), "OF");
         _;
     }
     modifier onlyRiskAdmin() {
-        require(msg.sender == riskAdmin, "ORA");
+        require(msg.sender == riskAdmin || msg.sender == owner(), "ORA");
         _;
     }
     modifier onlyWhiteListed() {
@@ -255,16 +246,9 @@ contract Pausable4626Vault is
     function deposit(
         uint256 assets,
         address receiver
-    )
-        public
-        override
-        whenNotPaused
-        nonReentrant
-        onlyWhiteListed
-        returns (uint256 shares)
-    {
+    ) public override whenNotPaused nonReentrant onlyWhiteListed returns (uint256 shares) {
         require(address(manager) != address(0), "manager not set");
-        require(totalSupply() + assets <= tvlCap, 'tvl cap');
+        require(totalSupply() + assets <= tvlCap, "tvl cap");
         // 1:1 → shares == assets
         uint256 bal0 = IERC20(asset()).balanceOf(address(this));
         // pull assets in
@@ -279,36 +263,24 @@ contract Pausable4626Vault is
     }
 
     // 1:1 conversions
-    function convertToShares(
-        uint256 assets
-    ) public view override returns (uint256) {
+    function convertToShares(uint256 assets) public view override returns (uint256) {
         return assets;
     }
-    function convertToAssets(
-        uint256 shares
-    ) public view override returns (uint256) {
+    function convertToAssets(uint256 shares) public view override returns (uint256) {
         return shares;
     }
 
     // Make previews explicit 1:1 (not strictly required, but clearer)
-    function previewDeposit(
-        uint256 assets
-    ) public view override returns (uint256) {
+    function previewDeposit(uint256 assets) public view override returns (uint256) {
         return assets;
     }
-    function previewMint(
-        uint256 shares
-    ) public view override returns (uint256) {
+    function previewMint(uint256 shares) public view override returns (uint256) {
         return shares;
     }
-    function previewWithdraw(
-        uint256 assets
-    ) public view override returns (uint256) {
+    function previewWithdraw(uint256 assets) public view override returns (uint256) {
         return assets;
     }
-    function previewRedeem(
-        uint256 shares
-    ) public view override returns (uint256) {
+    function previewRedeem(uint256 shares) public view override returns (uint256) {
         return shares;
     }
 
@@ -330,9 +302,7 @@ contract Pausable4626Vault is
         return 0;
     }
 
-    function maxDeposit(
-        address account
-    ) public view override returns (uint256) {
+    function maxDeposit(address account) public view override returns (uint256) {
         if (paused()) return 0;
         if (userWhiteListActive && !userWhiteList[account]) return 0;
         return type(uint256).max;
@@ -342,18 +312,10 @@ contract Pausable4626Vault is
         revert Disabled();
     }
 
-    function withdraw(
-        uint256,
-        address,
-        address
-    ) public pure override returns (uint256) {
+    function withdraw(uint256, address, address) public pure override returns (uint256) {
         revert Disabled();
     }
-    function redeem(
-        uint256,
-        address,
-        address
-    ) public pure override returns (uint256) {
+    function redeem(uint256, address, address) public pure override returns (uint256) {
         revert Disabled();
     }
 
@@ -364,10 +326,7 @@ contract Pausable4626Vault is
         return _request(assets, receiver);
     }
 
-    function _request(
-        uint256 shares,
-        address receiver
-    ) internal returns (uint256 id, uint256 _shares) {
+    function _request(uint256 shares, address receiver) internal returns (uint256 id, uint256 _shares) {
         _shares = shares;
 
         // 1) escrow shares in the vault
@@ -419,15 +378,7 @@ contract Pausable4626Vault is
     }
 
     // fulfill from a pending request (escrowed shares are held by the vault)
-    function fulfillRequest(
-        uint256 id
-    )
-        external
-        nonReentrant
-        whenNotPaused
-        onlyFulfiller
-        returns (uint256 assetsOut)
-    {
+    function fulfillRequest(uint256 id) external nonReentrant whenNotPaused onlyFulfiller returns (uint256 assetsOut) {
         Req storage r = requests[id];
         require(!r.settled, "settled");
 
@@ -447,10 +398,7 @@ contract Pausable4626Vault is
 
     /* ---- escape hatch ---- */
 
-    function withdrawToGov(
-        address token,
-        uint256 amount
-    ) external onlyOwner nonReentrant {
+    function withdrawToGov(address token, uint256 amount) external onlyOwner nonReentrant {
         if (token == address(0)) {
             (bool ok, ) = payable(owner()).call{value: amount}("");
             require(ok, "ETH xfer fail");
@@ -460,14 +408,9 @@ contract Pausable4626Vault is
             emit EmergencyWithdraw(token, amount);
         }
     }
-    function mintRewards(uint256 shares)
-        external
-        onlyMinter
-        whenNotPaused
-        nonReentrant
-    {
-        _mint(minter, shares);
-        emit RewardsMinted(minter, shares);
+    function mintRewards(uint256 shares) external onlyMinter whenNotPaused nonReentrant {
+        _mint(rewarder, shares);
+        emit RewardsMinted(rewarder, shares);
     }
 
     // Replace the existing receive() function with this:
@@ -497,9 +440,7 @@ contract Pausable4626Vault is
 
     /* ----------------------------- UUPS authorization -------------------------- */
 
-    function _authorizeUpgrade(
-        address newImplementation
-    ) internal override onlyOwner {}
+    function _authorizeUpgrade(address newImplementation) internal override onlyOwner {}
 
     /* ----------------------------- Storage gap (future-proofing) --------------- */
     uint256[50] private __gap;

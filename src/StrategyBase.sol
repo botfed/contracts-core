@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: Prop
 pragma solidity ^0.8.24;
 
 import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
@@ -10,9 +10,7 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 
 /* ---- Strategy interface expected by the manager ---- */
 interface IStrategy {
-    function withdrawToManager(
-        uint256 assets
-    ) external returns (uint256 withdrawn);
+    function withdrawToManager(uint256 assets) external returns (uint256 withdrawn);
 }
 
 /* ------------ Base strategy (upgradeable) ------------ */
@@ -48,7 +46,7 @@ abstract contract StrategyBaseUpgradeable is
         address riskAdmin_,
         address executor_,
         IERC20 asset_
-    ) public initializer {
+    ) public virtual initializer {
         require(owner_ != address(0), "owner=0");
         require(manager_ != address(0), "manager=0");
         require(riskAdmin_ != address(0), "riskAdmin=0");
@@ -107,9 +105,7 @@ abstract contract StrategyBaseUpgradeable is
 
     /* -------------------- manager withdrawals -------------------- */
     /// @notice Manager pulls `assets` of the strategy's asset to `recipient`.
-    function withdrawToManager(
-        uint256 assets
-    ) external onlyManagerOrGov nonReentrant returns (uint256 withdrawn) {
+    function withdrawToManager(uint256 assets) external onlyManagerOrGov nonReentrant returns (uint256 withdrawn) {
         uint256 bal = assetToken.balanceOf(address(this));
         withdrawn = assets > bal ? bal : assets;
         if (withdrawn > 0) assetToken.safeTransfer(manager, withdrawn);
@@ -118,10 +114,7 @@ abstract contract StrategyBaseUpgradeable is
 
     // manual escape hatch to manager that can be called by exectuor
 
-    function forceSweepToManager(
-        address token,
-        uint256 amount
-    ) external onlyExecutorOrGov nonReentrant {
+    function forceSweepToManager(address token, uint256 amount) external onlyExecutorOrGov nonReentrant {
         if (token == address(0)) {
             (bool ok, ) = payable(manager).call{value: amount}("");
             require(ok, "ETH xfer fail");
@@ -134,12 +127,7 @@ abstract contract StrategyBaseUpgradeable is
 
     receive() external payable {}
 
-    function onERC721Received(
-        address,
-        address,
-        uint256,
-        bytes calldata
-    ) external pure returns (bytes4) {
+    function onERC721Received(address, address, uint256, bytes calldata) external pure returns (bytes4) {
         return this.onERC721Received.selector;
     }
 
