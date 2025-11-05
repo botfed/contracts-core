@@ -116,7 +116,7 @@ contract StrategyManager is Initializable, UUPSUpgradeable, OwnableUpgradeable, 
         }
 
         require(OwnableUpgradeable(strat).owner() == owner(), "strat invalid owner");
-        require(IStrategy(strat).assetToken() == asset, "strat invalid asset");
+        require(IStrategy(strat).asset() == asset, "strat invalid asset");
 
         isStrategy[strat] = true;
         strategies.push(strat);

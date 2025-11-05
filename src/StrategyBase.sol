@@ -11,7 +11,7 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 /* ---- Strategy interface expected by the manager ---- */
 interface IStrategy {
     function withdrawToManager(uint256 assets) external returns (uint256 withdrawn);
-    function assetToken() external view returns (IERC20);
+    function asset() external view returns (IERC20);
 }
 
 /* ------------ Base strategy (upgradeable) ------------ */
@@ -24,7 +24,7 @@ abstract contract StrategyBaseUpgradeable is
 {
     using SafeERC20 for IERC20;
 
-    IERC20 public assetToken; // e.g., WETH
+    IERC20 public asset; // e.g., WETH
     address public manager; // StrategyVaultManager
     address public executor; // keeper/bot
     address public riskAdmin; // keeper/bot
@@ -57,7 +57,7 @@ abstract contract StrategyBaseUpgradeable is
         manager = manager_;
         executor = executor_;
         riskAdmin = riskAdmin_;
-        assetToken = asset_;
+        asset = asset_;
 
         __Ownable_init(owner_);
         __UUPSUpgradeable_init();
@@ -107,9 +107,9 @@ abstract contract StrategyBaseUpgradeable is
     /* -------------------- manager withdrawals -------------------- */
     /// @notice Manager pulls `assets` of the strategy's asset to `recipient`.
     function withdrawToManager(uint256 assets) external onlyManagerOrGov nonReentrant returns (uint256 withdrawn) {
-        uint256 bal = assetToken.balanceOf(address(this));
+        uint256 bal = asset.balanceOf(address(this));
         withdrawn = assets > bal ? bal : assets;
-        if (withdrawn > 0) assetToken.safeTransfer(manager, withdrawn);
+        if (withdrawn > 0) asset.safeTransfer(manager, withdrawn);
         emit Withdrawn(manager, withdrawn);
     }
 

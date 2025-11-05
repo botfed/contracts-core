@@ -11,11 +11,13 @@ import "../src/StrategyManager.sol";
 // Mock Strategy for testing
 contract MockStrategy {
     IERC20 public asset;
+    address public owner;
     uint256 public withdrawResult = type(uint256).max; // Return full amount by default
     bool public shouldRevert = false;
 
-    constructor(IERC20 _asset) {
+    constructor(IERC20 _asset, address owner_) {
         asset = _asset;
+        owner = owner_;
     }
 
     function setWithdrawResult(uint256 _result) external {
@@ -31,9 +33,7 @@ contract MockStrategy {
             revert("Strategy error");
         }
 
-        uint256 toReturn = withdrawResult == type(uint256).max
-            ? requested
-            : withdrawResult;
+        uint256 toReturn = withdrawResult == type(uint256).max ? requested : withdrawResult;
         uint256 bal = asset.balanceOf(address(this));
         if (toReturn > 0 && toReturn < bal) {
             asset.transfer(msg.sender, toReturn);
@@ -70,11 +70,7 @@ contract StrategyManagerTest is Test {
     event StrategyAdded(address indexed strat);
     event StrategyRemoved(address indexed strat);
     event CapitalPushed(address indexed strat, uint256 amount);
-    event CapitalPulled(
-        address indexed strat,
-        uint256 requested,
-        uint256 received
-    );
+    event CapitalPulled(address indexed strat, uint256 requested, uint256 received);
     event WithdrawnTo(address indexed to, uint256 amount);
     event SetVault(address indexed who);
     event SetTreasury(address indexed who);
@@ -97,10 +93,7 @@ contract StrategyManagerTest is Test {
             exec
         );
 
-        ERC1967Proxy proxy = new ERC1967Proxy(
-            address(implementation),
-            initData
-        );
+        ERC1967Proxy proxy = new ERC1967Proxy(address(implementation), initData);
         strategyManager = StrategyManager(payable(address(proxy)));
 
         // Set vault
@@ -108,8 +101,8 @@ contract StrategyManagerTest is Test {
         strategyManager.setVault(vault);
 
         // Deploy mock strategies
-        mockStrategy1 = new MockStrategy(asset);
-        mockStrategy2 = new MockStrategy(asset);
+        mockStrategy1 = new MockStrategy(asset, owner);
+        mockStrategy2 = new MockStrategy(asset, owner);
         badStrategy = new BadMockStrategy();
 
         // Mint some tokens to strategy manager for testing
@@ -332,7 +325,7 @@ contract StrategyManagerTest is Test {
         uint256 maxStrategies = strategyManager.MAX_STRATEGIES();
 
         for (uint256 i = 0; i < maxStrategies; i++) {
-            MockStrategy newStrat = new MockStrategy(asset);
+            MockStrategy newStrat = new MockStrategy(asset, owner);
             vm.prank(owner);
             strategyManager.addStrategy(address(newStrat));
         }
@@ -363,8 +356,7 @@ contract StrategyManagerTest is Test {
         assertEq(strategyManager.strategiesLength(), 1);
 
         // Verify swap-remove worked correctly
-        address[] memory activeStrategies = strategyManager
-            .getActiveStrategies();
+        address[] memory activeStrategies = strategyManager.getActiveStrategies();
         assertEq(activeStrategies.length, 1);
         assertEq(activeStrategies[0], address(mockStrategy2));
     }
@@ -377,7 +369,7 @@ contract StrategyManagerTest is Test {
 
     function test_RemoveStrategy_SwapRemove() public {
         // Add three strategies
-        MockStrategy strat3 = new MockStrategy(asset);
+        MockStrategy strat3 = new MockStrategy(asset, owner);
         vm.startPrank(owner);
         strategyManager.addStrategy(address(mockStrategy1));
         strategyManager.addStrategy(address(mockStrategy2));
@@ -390,16 +382,14 @@ contract StrategyManagerTest is Test {
 
         // Verify array compaction
         assertEq(strategyManager.strategiesLength(), 2);
-        address[] memory activeStrategies = strategyManager
-            .getActiveStrategies();
+        address[] memory activeStrategies = strategyManager.getActiveStrategies();
         assertEq(activeStrategies.length, 2);
 
         // Order doesn't matter, but both remaining strategies should be present
         bool foundStrat1 = false;
         bool foundStrat3 = false;
         for (uint256 i = 0; i < activeStrategies.length; i++) {
-            if (activeStrategies[i] == address(mockStrategy1))
-                foundStrat1 = true;
+            if (activeStrategies[i] == address(mockStrategy1)) foundStrat1 = true;
             if (activeStrategies[i] == address(strat3)) foundStrat3 = true;
         }
         assertTrue(foundStrat1);
@@ -414,12 +404,8 @@ contract StrategyManagerTest is Test {
 
         uint256 amount = 1000e18;
         uint256 initialBalance = asset.balanceOf(address(strategyManager));
-        uint256 initialStrategyBalance = asset.balanceOf(
-            address(mockStrategy1)
-        );
-        uint256 initialDeployed = strategyManager.getStrategyDeployed(
-            address(mockStrategy1)
-        );
+        uint256 initialStrategyBalance = asset.balanceOf(address(mockStrategy1));
+        uint256 initialDeployed = strategyManager.getStrategyDeployed(address(mockStrategy1));
 
         vm.expectEmit(true, true, true, true);
         emit CapitalPushed(address(mockStrategy1), amount);
@@ -427,25 +413,14 @@ contract StrategyManagerTest is Test {
         vm.prank(exec);
         strategyManager.pushToStrategy(address(mockStrategy1), amount);
 
-        assertEq(
-            asset.balanceOf(address(strategyManager)),
-            initialBalance - amount
-        );
-        assertEq(
-            asset.balanceOf(address(mockStrategy1)),
-            initialStrategyBalance + amount
-        );
-        assertEq(
-            strategyManager.getStrategyDeployed(address(mockStrategy1)),
-            initialDeployed + amount
-        );
+        assertEq(asset.balanceOf(address(strategyManager)), initialBalance - amount);
+        assertEq(asset.balanceOf(address(mockStrategy1)), initialStrategyBalance + amount);
+        assertEq(strategyManager.getStrategyDeployed(address(mockStrategy1)), initialDeployed + amount);
     }
 
     function test_PushToStrategy_UnknownStrategy() public {
         vm.prank(exec);
-        vm.expectRevert(
-            abi.encodeWithSelector(StrategyManager.UnknownStrategy.selector)
-        );
+        vm.expectRevert(abi.encodeWithSelector(StrategyManager.UnknownStrategy.selector));
         strategyManager.pushToStrategy(address(mockStrategy1), 1000e18);
     }
 
@@ -457,10 +432,7 @@ contract StrategyManagerTest is Test {
 
         vm.prank(exec);
         vm.expectRevert();
-        strategyManager.pushToStrategy(
-            address(mockStrategy1),
-            managerBalance + 1
-        );
+        strategyManager.pushToStrategy(address(mockStrategy1), managerBalance + 1);
     }
 
     function test_PullFromStrategy_Success() public {
@@ -470,36 +442,19 @@ contract StrategyManagerTest is Test {
         uint256 requested = 500e18;
         asset.mint(address(mockStrategy1), 1000e18);
         uint256 initialBalance = asset.balanceOf(address(strategyManager));
-        uint256 initialStrategyBalance = asset.balanceOf(
-            address(mockStrategy1)
-        );
-        uint256 initialWithdrawn = strategyManager.getStrategyWithdrawn(
-            address(mockStrategy1)
-        );
-
+        uint256 initialStrategyBalance = asset.balanceOf(address(mockStrategy1));
+        uint256 initialWithdrawn = strategyManager.getStrategyWithdrawn(address(mockStrategy1));
 
         vm.expectEmit(true, true, true, true);
         emit CapitalPulled(address(mockStrategy1), requested, requested);
 
         vm.prank(exec);
-        uint256 received = strategyManager.pullFromStrategy(
-            address(mockStrategy1),
-            requested
-        );
+        uint256 received = strategyManager.pullFromStrategy(address(mockStrategy1), requested);
 
         assertEq(received, requested);
-        assertEq(
-            asset.balanceOf(address(strategyManager)),
-            initialBalance + requested
-        );
-        assertEq(
-            asset.balanceOf(address(mockStrategy1)),
-            initialStrategyBalance - requested
-        );
-        assertEq(
-            strategyManager.getStrategyWithdrawn(address(mockStrategy1)),
-            initialWithdrawn + requested
-        );
+        assertEq(asset.balanceOf(address(strategyManager)), initialBalance + requested);
+        assertEq(asset.balanceOf(address(mockStrategy1)), initialStrategyBalance - requested);
+        assertEq(strategyManager.getStrategyWithdrawn(address(mockStrategy1)), initialWithdrawn + requested);
     }
 
     function test_PullFromStrategy_PartialWithdrawal() public {
@@ -514,28 +469,17 @@ contract StrategyManagerTest is Test {
         mockStrategy1.setWithdrawResult(actualReceived);
 
         uint256 initialBalance = asset.balanceOf(address(strategyManager));
-        uint256 initialWithdrawn = strategyManager.getStrategyWithdrawn(
-            address(mockStrategy1)
-        );
+        uint256 initialWithdrawn = strategyManager.getStrategyWithdrawn(address(mockStrategy1));
 
         vm.expectEmit(true, true, true, true);
         emit CapitalPulled(address(mockStrategy1), requested, actualReceived);
 
         vm.prank(exec);
-        uint256 received = strategyManager.pullFromStrategy(
-            address(mockStrategy1),
-            requested
-        );
+        uint256 received = strategyManager.pullFromStrategy(address(mockStrategy1), requested);
 
         assertEq(received, actualReceived);
-        assertEq(
-            asset.balanceOf(address(strategyManager)),
-            initialBalance + actualReceived
-        );
-        assertEq(
-            strategyManager.getStrategyWithdrawn(address(mockStrategy1)),
-            initialWithdrawn + actualReceived
-        );
+        assertEq(asset.balanceOf(address(strategyManager)), initialBalance + actualReceived);
+        assertEq(strategyManager.getStrategyWithdrawn(address(mockStrategy1)), initialWithdrawn + actualReceived);
     }
 
     function test_PullFromStrategy_InconsistentReturn() public {
@@ -545,23 +489,16 @@ contract StrategyManagerTest is Test {
 
         // Strategy claims to return 1000 but only transfers 500
         mockStrategy1.setWithdrawResult(1000e18);
-        asset.burn(
-            address(mockStrategy1),
-            asset.balanceOf(address(mockStrategy1)) - 500e18
-        );
+        asset.burn(address(mockStrategy1), asset.balanceOf(address(mockStrategy1)) - 500e18);
 
         vm.prank(exec);
-        vm.expectRevert(
-            abi.encodeWithSelector(StrategyManager.InconsistentReturn.selector)
-        );
+        vm.expectRevert(abi.encodeWithSelector(StrategyManager.InconsistentReturn.selector));
         strategyManager.pullFromStrategy(address(mockStrategy1), 1000e18);
     }
 
     function test_PullFromStrategy_UnknownStrategy() public {
         vm.prank(exec);
-        vm.expectRevert(
-            abi.encodeWithSelector(StrategyManager.UnknownStrategy.selector)
-        );
+        vm.expectRevert(abi.encodeWithSelector(StrategyManager.UnknownStrategy.selector));
         strategyManager.pullFromStrategy(address(mockStrategy1), 1000e18);
     }
 
@@ -578,9 +515,7 @@ contract StrategyManagerTest is Test {
 
     function test_WithdrawToVault_Success() public {
         uint256 amount = 1000e18;
-        uint256 initialManagerBalance = asset.balanceOf(
-            address(strategyManager)
-        );
+        uint256 initialManagerBalance = asset.balanceOf(address(strategyManager));
         uint256 initialVaultBalance = asset.balanceOf(vault);
 
         vm.expectEmit(true, true, true, true);
@@ -589,18 +524,13 @@ contract StrategyManagerTest is Test {
         vm.prank(vault);
         strategyManager.withdrawToVault(amount);
 
-        assertEq(
-            asset.balanceOf(address(strategyManager)),
-            initialManagerBalance - amount
-        );
+        assertEq(asset.balanceOf(address(strategyManager)), initialManagerBalance - amount);
         assertEq(asset.balanceOf(vault), initialVaultBalance + amount);
     }
 
     function test_WithdrawToVault_ZeroAmount() public {
         vm.prank(vault);
-        vm.expectRevert(
-            abi.encodeWithSelector(StrategyManager.ZeroAmount.selector)
-        );
+        vm.expectRevert(abi.encodeWithSelector(StrategyManager.ZeroAmount.selector));
         strategyManager.withdrawToVault(0);
     }
 
@@ -609,13 +539,7 @@ contract StrategyManagerTest is Test {
         uint256 requested = balance + 1;
 
         vm.prank(vault);
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                StrategyManager.InsufficientAssets.selector,
-                requested,
-                balance
-            )
-        );
+        vm.expectRevert(abi.encodeWithSelector(StrategyManager.InsufficientAssets.selector, requested, balance));
         strategyManager.withdrawToVault(requested);
     }
 
@@ -626,69 +550,33 @@ contract StrategyManagerTest is Test {
         strategyManager.addStrategy(address(mockStrategy1));
 
         // Initial state
-        assertEq(
-            strategyManager.getStrategyDeployed(address(mockStrategy1)),
-            0
-        );
-        assertEq(
-            strategyManager.getStrategyWithdrawn(address(mockStrategy1)),
-            0
-        );
-        assertEq(
-            strategyManager.strategyNetDeployed(address(mockStrategy1)),
-            0
-        );
+        assertEq(strategyManager.getStrategyDeployed(address(mockStrategy1)), 0);
+        assertEq(strategyManager.getStrategyWithdrawn(address(mockStrategy1)), 0);
+        assertEq(strategyManager.strategyNetDeployed(address(mockStrategy1)), 0);
 
         // Push 1000
         vm.prank(exec);
         strategyManager.pushToStrategy(address(mockStrategy1), 1000e18);
 
-        assertEq(
-            strategyManager.getStrategyDeployed(address(mockStrategy1)),
-            1000e18
-        );
-        assertEq(
-            strategyManager.getStrategyWithdrawn(address(mockStrategy1)),
-            0
-        );
-        assertEq(
-            strategyManager.strategyNetDeployed(address(mockStrategy1)),
-            1000e18
-        );
+        assertEq(strategyManager.getStrategyDeployed(address(mockStrategy1)), 1000e18);
+        assertEq(strategyManager.getStrategyWithdrawn(address(mockStrategy1)), 0);
+        assertEq(strategyManager.strategyNetDeployed(address(mockStrategy1)), 1000e18);
 
         // Pull 600
         vm.prank(exec);
         strategyManager.pullFromStrategy(address(mockStrategy1), 600e18);
 
-        assertEq(
-            strategyManager.getStrategyDeployed(address(mockStrategy1)),
-            1000e18
-        );
-        assertEq(
-            strategyManager.getStrategyWithdrawn(address(mockStrategy1)),
-            600e18
-        );
-        assertEq(
-            strategyManager.strategyNetDeployed(address(mockStrategy1)),
-            400e18
-        );
+        assertEq(strategyManager.getStrategyDeployed(address(mockStrategy1)), 1000e18);
+        assertEq(strategyManager.getStrategyWithdrawn(address(mockStrategy1)), 600e18);
+        assertEq(strategyManager.strategyNetDeployed(address(mockStrategy1)), 400e18);
 
         // Push another 500
         vm.prank(exec);
         strategyManager.pushToStrategy(address(mockStrategy1), 500e18);
 
-        assertEq(
-            strategyManager.getStrategyDeployed(address(mockStrategy1)),
-            1500e18
-        );
-        assertEq(
-            strategyManager.getStrategyWithdrawn(address(mockStrategy1)),
-            600e18
-        );
-        assertEq(
-            strategyManager.strategyNetDeployed(address(mockStrategy1)),
-            900e18
-        );
+        assertEq(strategyManager.getStrategyDeployed(address(mockStrategy1)), 1500e18);
+        assertEq(strategyManager.getStrategyWithdrawn(address(mockStrategy1)), 600e18);
+        assertEq(strategyManager.strategyNetDeployed(address(mockStrategy1)), 900e18);
     }
 
     function test_CapitalTracking_ProfitableStrategy() public {
@@ -706,18 +594,9 @@ contract StrategyManagerTest is Test {
         vm.prank(exec);
         strategyManager.pullFromStrategy(address(mockStrategy1), 1200e18);
 
-        assertEq(
-            strategyManager.getStrategyDeployed(address(mockStrategy1)),
-            1000e18
-        );
-        assertEq(
-            strategyManager.getStrategyWithdrawn(address(mockStrategy1)),
-            1200e18
-        );
-        assertEq(
-            strategyManager.strategyNetDeployed(address(mockStrategy1)),
-            -200e18
-        ); // Negative = profit!
+        assertEq(strategyManager.getStrategyDeployed(address(mockStrategy1)), 1000e18);
+        assertEq(strategyManager.getStrategyWithdrawn(address(mockStrategy1)), 1200e18);
+        assertEq(strategyManager.strategyNetDeployed(address(mockStrategy1)), -200e18); // Negative = profit!
     }
 
     /* ==================== VIEW FUNCTIONS TESTS ==================== */
@@ -814,10 +693,7 @@ contract StrategyManagerTest is Test {
         vm.prank(exec);
         strategyManager.forceSweepToTreasury(address(emergencyToken), amount);
 
-        assertEq(
-            emergencyToken.balanceOf(treasury),
-            initialTreasuryBalance + amount
-        );
+        assertEq(emergencyToken.balanceOf(treasury), initialTreasuryBalance + amount);
     }
 
     function test_EmergencyWithdrawToken_ETH() public {
@@ -850,8 +726,7 @@ contract StrategyManagerTest is Test {
     /* ==================== RECEIVE GUARD TESTS ==================== */
 
     function test_Receive_Reverts() public {
-        (bool success, bytes memory data) = payable(address(strategyManager))
-            .call{value: 1 ether}("");
+        (bool success, bytes memory data) = payable(address(strategyManager)).call{value: 1 ether}("");
 
         assertFalse(success);
         // Check that it starts with Error(string) selector
@@ -908,23 +783,14 @@ contract StrategyManagerTest is Test {
         strategyManager.pushToStrategy(address(mockStrategy2), 1500e18);
 
         // Pull from one strategy
-        uint256 received = strategyManager.pullFromStrategy(
-            address(mockStrategy1),
-            1000e18
-        );
+        uint256 received = strategyManager.pullFromStrategy(address(mockStrategy1), 1000e18);
         assertEq(received, 1000e18);
 
         vm.stopPrank();
 
         // Check balances
-        assertEq(
-            strategyManager.strategyNetDeployed(address(mockStrategy1)),
-            1000e18
-        );
-        assertEq(
-            strategyManager.strategyNetDeployed(address(mockStrategy2)),
-            1500e18
-        );
+        assertEq(strategyManager.strategyNetDeployed(address(mockStrategy1)), 1000e18);
+        assertEq(strategyManager.strategyNetDeployed(address(mockStrategy2)), 1500e18);
         assertEq(strategyManager.getTotalDeployed(), 3500e18);
         assertEq(strategyManager.getTotalWithdrawn(), 1000e18);
 
@@ -934,9 +800,7 @@ contract StrategyManagerTest is Test {
 
         // Should not be able to push to removed strategy
         vm.prank(exec);
-        vm.expectRevert(
-            abi.encodeWithSelector(StrategyManager.UnknownStrategy.selector)
-        );
+        vm.expectRevert(abi.encodeWithSelector(StrategyManager.UnknownStrategy.selector));
         strategyManager.pushToStrategy(address(mockStrategy1), 500e18);
 
         // But can still interact with active strategy
@@ -966,27 +830,18 @@ contract StrategyManagerTest is Test {
 
         // Pull back more than deployed (profit scenario)
         vm.prank(exec);
-        uint256 received = strategyManager.pullFromStrategy(
-            address(mockStrategy1),
-            1200e18
-        );
+        uint256 received = strategyManager.pullFromStrategy(address(mockStrategy1), 1200e18);
         assertEq(received, 1200e18);
 
         // Net deployed should be negative (profit!)
-        assertEq(
-            strategyManager.strategyNetDeployed(address(mockStrategy1)),
-            -200e18
-        );
+        assertEq(strategyManager.strategyNetDeployed(address(mockStrategy1)), -200e18);
 
         // Deploy again
         vm.prank(exec);
         strategyManager.pushToStrategy(address(mockStrategy1), 800e18);
 
         // Now net should be positive again
-        assertEq(
-            strategyManager.strategyNetDeployed(address(mockStrategy1)),
-            600e18
-        );
+        assertEq(strategyManager.strategyNetDeployed(address(mockStrategy1)), 600e18);
     }
 
     function test_VaultWithdrawal_AfterStrategyOperations() public {
@@ -1019,7 +874,7 @@ contract StrategyManagerTest is Test {
         MockStrategy[] memory strategies = new MockStrategy[](maxStrategies);
         vm.startPrank(owner);
         for (uint256 i = 0; i < maxStrategies; i++) {
-            strategies[i] = new MockStrategy(asset);
+            strategies[i] = new MockStrategy(asset, owner);
             strategyManager.addStrategy(address(strategies[i]));
         }
         vm.stopPrank();
@@ -1030,7 +885,7 @@ contract StrategyManagerTest is Test {
         vm.startPrank(owner);
         strategyManager.removeStrategy(address(strategies[0]));
 
-        MockStrategy newStrategy = new MockStrategy(asset);
+        MockStrategy newStrategy = new MockStrategy(asset, owner);
         strategyManager.addStrategy(address(newStrategy));
         vm.stopPrank();
 
@@ -1092,24 +947,15 @@ contract StrategyManagerTest is Test {
         strategyManager.addStrategy(address(mockStrategy1));
 
         // Strategy has no balance
-        asset.burn(
-            address(mockStrategy1),
-            asset.balanceOf(address(mockStrategy1))
-        );
+        asset.burn(address(mockStrategy1), asset.balanceOf(address(mockStrategy1)));
 
         vm.prank(exec);
         vm.expectRevert();
-        uint256 received = strategyManager.pullFromStrategy(
-            address(mockStrategy1),
-            1000e18
-        );
+        uint256 received = strategyManager.pullFromStrategy(address(mockStrategy1), 1000e18);
 
         // Should return 0 and update tracking accordingly
         assertEq(received, 0);
-        assertEq(
-            strategyManager.getStrategyWithdrawn(address(mockStrategy1)),
-            0
-        );
+        assertEq(strategyManager.getStrategyWithdrawn(address(mockStrategy1)), 0);
     }
 
     function test_StrategyTracking_ConsistencyChecks() public {
@@ -1125,18 +971,9 @@ contract StrategyManagerTest is Test {
         vm.stopPrank();
 
         // Check final state
-        assertEq(
-            strategyManager.getStrategyDeployed(address(mockStrategy1)),
-            1500e18
-        );
-        assertEq(
-            strategyManager.getStrategyWithdrawn(address(mockStrategy1)),
-            1100e18
-        );
-        assertEq(
-            strategyManager.strategyNetDeployed(address(mockStrategy1)),
-            400e18
-        );
+        assertEq(strategyManager.getStrategyDeployed(address(mockStrategy1)), 1500e18);
+        assertEq(strategyManager.getStrategyWithdrawn(address(mockStrategy1)), 1100e18);
+        assertEq(strategyManager.strategyNetDeployed(address(mockStrategy1)), 400e18);
     }
 
     function test_AccessControl_Comprehensive() public {
