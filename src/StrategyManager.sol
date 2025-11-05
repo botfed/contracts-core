@@ -15,6 +15,7 @@ import {IStrategy} from "./StrategyBase.sol";
 interface IStrategyManager {
     function asset() external view returns (IERC20);
     function withdrawToVault(uint256 amt) external;
+    function maxWithdrawable() external view returns (uint256);
 }
 
 contract StrategyManager is Initializable, UUPSUpgradeable, OwnableUpgradeable, ReentrancyGuardUpgradeable {
@@ -114,6 +115,9 @@ contract StrategyManager is Initializable, UUPSUpgradeable, OwnableUpgradeable, 
             revert("Invalid strategy interface");
         }
 
+        require(OwnableUpgradeable(strat).owner() == owner(), "strat invalid owner");
+        require(IStrategy(strat).assetToken() == asset, "strat invalid asset");
+
         isStrategy[strat] = true;
         strategies.push(strat);
         emit StrategyAdded(strat);
@@ -173,6 +177,10 @@ contract StrategyManager is Initializable, UUPSUpgradeable, OwnableUpgradeable, 
         if (b0 < amount) revert InsufficientAssets(amount, b0);
         asset.safeTransfer(vault, amount);
         emit WithdrawnTo(vault, amount);
+    }
+
+    function maxWithdrawable() external view returns (uint256) {
+        return asset.balanceOf(address(this));
     }
 
     /* --------------------------- Admin ops -------------------------- */

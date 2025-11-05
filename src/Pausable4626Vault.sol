@@ -9,18 +9,8 @@ import {PausableUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/Pau
 import {ERC4626Upgradeable} from "@openzeppelin/contracts-upgradeable/token/ERC20/extensions/ERC4626Upgradeable.sol";
 import {ReentrancyGuardUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {IStrategyManager} from "./StrategyManager.sol";
-import {WithdrawRequestNFTUpgradeable} from "./WithdrawRequestNFTUpgradeable.sol";
-
-// Add this interface at the top with other imports
-interface IWETH {
-    function deposit() external payable;
-    function withdraw(uint256) external;
-    function balanceOf(address) external view returns (uint256);
-    function transfer(address, uint256) external returns (bool);
-}
 
 /**
  * @title Pausable4626Vault
@@ -37,18 +27,16 @@ contract Pausable4626Vault is
 {
     using SafeERC20 for IERC20;
 
-    address public immutable WETH;
-
-    /* ---------- requests ---------- */
-    struct Req {
-        uint256 shares; // shares escrowed in the vault
+    struct RedemptionRequest {
+        uint256 amount; // amount escrowed in the vault
         address receiver; // payout receiver
-        address owner; // payout receiver
-        bool settled; // fulfilled or canceled
-        bool claimed; // fulfilled or canceled
+        address owner; // request owner
+        bool fulfilled; // fulfilled
+        bool claimed; // claimed
+        uint256 assetsLocked;
     }
 
-    WithdrawRequestNFTUpgradeable public withdrawNFT;
+    address public deprecatedRedeemNFT_OR_newFeatureAddress;
 
     address public fulfiller;
     address public riskAdmin;
@@ -61,14 +49,50 @@ contract Pausable4626Vault is
     bool public userWhiteListActive;
     mapping(address => bool) public userWhiteList;
 
-    mapping(uint256 => Req) public requests;
+    mapping(uint256 => RedemptionRequest) public requests;
     uint256 public nextReqId;
     uint256 public amtRequested;
 
+    /* -- Strategy functions --- */
+    event ManagerSet(address indexed a);
+    event FulfillerSet(address indexed a);
+    event RiskAdminSet(address indexed a);
+    event MinterSet(address indexed a);
+    event RewarderSet(address indexed a);
+    event CapitalDeployed(address strat, uint256 amount);
+    event RedeemRequestCreated(uint256 indexed id, address indexed owner, address indexed receiver, uint256 shares);
+    event RedeemRequestClaimed(
+        uint256 indexed id,
+        address indexed owner,
+        address indexed receiver,
+        uint256 shares,
+        uint256 assetsOut
+    );
+    event RedeemRequestFulfilled(
+        uint256 indexed id,
+        address indexed owner,
+        address indexed receiver,
+        address fulfiller,
+        uint256 requested,
+        uint256 assetsLocked
+    );
+    event RedeemRequestCanceled(uint256 indexed id, address indexed owner, uint256 shares);
+    event UserWhiteList(address indexed user, bool isWhiteListed);
+    event UserWhiteListActive(bool isActive);
+    event TVLCapChanged(uint256 newCap);
+    event RewardsMinted(address indexed to, uint256 amount);
+
+    /* ---------- errors ---------- */
+    error Disabled();
+    error Shortfall(uint256 needed, uint256 got);
+    error NotRequestOwner();
+    error RequestNotFulfilled();
+    error RequestAlreadyClaimed();
+    error RequestAlreadyFulfilled();
+    error RequestDoesNotExist();
+
     /// @custom:oz-upgrades-unsafe-allow constructor
-    constructor(address _weth) {
-        require(_weth != address(0), "WETH address cannot be zero");
-        WETH = _weth;
+    constructor() {
         _disableInitializers(); // UUPS pattern safeguard
     }
 
@@ -101,24 +125,6 @@ contract Pausable4626Vault is
         riskAdmin = riskAdmin_;
         minter = minter_;
         rewarder = rewarder_;
-        // ---------- Deploy UUPS proxy for the upgradeable WithdrawRequestNFT ----------
-        // 1) Deploy implementation
-
-        // 2) Encode initializer call for the proxy
-        bytes memory initCalldata = abi.encodeWithSelector(
-            WithdrawRequestNFTUpgradeable.initialize.selector,
-            "Withdraw Request", // name
-            "wREQ", // symbol
-            address(this), // vault_  (this vault is the minter/burner)
-            initialOwner // owner_  (upgrade/admin of the NFT)
-        );
-
-        // 3) Deploy ERC1967 proxy pointing to the implementation
-        withdrawNFT = WithdrawRequestNFTUpgradeable(
-            address(new ERC1967Proxy(address(new WithdrawRequestNFTUpgradeable()), initCalldata))
-        );
-        // -------------------------------------
-
         tvlCap = 32 ether;
         userWhiteListActive = true;
 
@@ -130,26 +136,6 @@ contract Pausable4626Vault is
         __UUPSUpgradeable_init();
         __ReentrancyGuard_init();
     }
-
-    /* -- Strategy functions --- */
-    event ManagerSet(address indexed a);
-    event FulfillerSet(address indexed a);
-    event RiskAdminSet(address indexed a);
-    event MinterSet(address indexed a);
-    event RewarderSet(address indexed a);
-    event CapitalDeployed(address strat, uint256 amount);
-    event RequestCreated(uint256 indexed id, address indexed owner, uint256 shares, address receiver);
-    event RequestClaimed(uint256 indexed id, address indexed owner, address receiver, uint256 shares);
-    event RequestFulfilled(uint256 indexed id, address indexed owner, address indexed receiver, uint256 assetsOut);
-    event EmergencyWithdraw(address indexed token, uint256 amount);
-    event UserWhiteList(address indexed user, bool isWhiteListed);
-    event UserWhiteListActive(bool isActive);
-    event TVLCapChanged(uint256 newCap);
-    event RewardsMinted(address indexed to, uint256 amount);
-
-    /* ---------- errors ---------- */
-    error Disabled();
-    error Shortfall(uint256 needed, uint256 got);
 
     /*---- setters ---- */
 
@@ -248,20 +234,101 @@ contract Pausable4626Vault is
         address receiver
     ) public override whenNotPaused nonReentrant onlyWhiteListed returns (uint256 shares) {
         require(address(manager) != address(0), "manager not set");
-        require(totalSupply() + assets <= tvlCap, "tvl cap");
+        uint256 maxAssets = maxDeposit(receiver);
+        if (assets > maxAssets) revert ERC4626ExceededMaxDeposit(receiver, assets, maxAssets);
         // 1:1 → shares == assets
-        uint256 bal0 = IERC20(asset()).balanceOf(address(this));
-        // pull assets in
-        IERC20(asset()).safeTransferFrom(msg.sender, address(this), assets);
-        shares = IERC20(asset()).balanceOf(address(this)) - bal0;
-        require(shares == assets, "RAM");
-        // mint shares
-        _mint(receiver, shares);
-
-        // kick capital to manager
-        _pushToManager(shares);
+        shares = previewDeposit(assets);
+        _deposit(msg.sender, receiver, assets, shares);
     }
 
+    /**
+     * @notice Request redemption of shares for underlying assets
+     * @param amount Number of shares to redeem
+     * @param receiver Address that will receive the redeemed assets (use address(0) for msg.sender)
+     * @return id The unique identifier for this redemption request
+     * @dev Shares are transferred to vault escrow. Must be fulfilled by fulfiller before claiming.
+     */
+    function requestRedeem(
+        uint256 amount,
+        address receiver
+    ) external whenNotPaused nonReentrant onlyWhiteListed returns (uint256 id) {
+        uint256 maxAmount = maxRedeem(msg.sender);
+        if (amount > maxAmount) {
+            revert ERC4626ExceededMaxRedeem(msg.sender, amount, maxAmount);
+        }
+        return _requestRedeem(msg.sender, receiver, amount);
+    }
+
+    /**
+     * @notice Fulfill a pending redemption request by locking assets
+     * @param id The redemption request identifier
+     * @dev Only callable by fulfiller. Locks assets at current 1:1 exchange rate.
+     *      Pulls liquidity from manager if vault balance insufficient.
+     */
+    function fulfillRequest(uint256 id) external nonReentrant whenNotPaused onlyFulfiller {
+        RedemptionRequest storage r = requests[id];
+        if (r.owner == address(0)) revert RequestDoesNotExist();
+        if (r.fulfilled) revert RequestAlreadyFulfilled();
+        if (r.claimed) revert RequestAlreadyClaimed();
+
+        // ensure liquidity: pull from manager if needed
+        uint256 bal = IERC20(asset()).balanceOf(address(this));
+        r.assetsLocked = previewRedeem(r.amount);
+        amtRequested += r.assetsLocked;
+        if (bal < amtRequested) _pullFromManager(amtRequested - bal); // must make funds available or revert
+        r.fulfilled = true;
+        emit RedeemRequestFulfilled(id, r.owner, r.receiver, msg.sender, r.amount, r.assetsLocked);
+    }
+    /**
+     * @notice Claim assets from a fulfilled redemption request
+     * @param id The redemption request identifier
+     * @dev Burns escrowed shares and transfers locked assets to receiver.
+     *      Only callable by request owner after fulfillment.
+     */
+    function claimRedemption(uint256 id) external nonReentrant whenNotPaused {
+        RedemptionRequest storage r = requests[id];
+        if (r.owner != msg.sender) revert NotRequestOwner();
+        if (!r.fulfilled) revert RequestNotFulfilled();
+        if (r.claimed) revert RequestAlreadyClaimed();
+        r.claimed = true;
+        delete requests[id];
+        _burn(address(this), r.amount);
+        IERC20(asset()).safeTransfer(r.receiver, r.assetsLocked);
+        amtRequested -= r.assetsLocked;
+        emit RedeemRequestClaimed(id, r.owner, r.receiver, r.amount, r.assetsLocked);
+    }
+
+    /**
+     * @notice Cancel an unfulfilled redemption request
+     * @param id The redemption request identifier
+     * @dev Returns escrowed shares to owner. Can only cancel before fulfillment.
+     */
+    function cancelRequest(uint256 id) external nonReentrant whenNotPaused {
+        RedemptionRequest storage r = requests[id];
+        if (r.owner != msg.sender) revert NotRequestOwner();
+        if (r.fulfilled) revert RequestAlreadyFulfilled();
+        if (r.claimed) revert RequestAlreadyClaimed();
+
+        uint256 shares = r.amount;
+        delete requests[id];
+
+        // Return shares to user
+        _transfer(address(this), msg.sender, shares);
+        emit RedeemRequestCanceled(id, msg.sender, shares);
+    }
+
+    /* view and pure functions */
+
+    function getRequestStatus(
+        uint256 id
+    ) external view returns (bool exists, bool fulfilled, bool claimed, uint256 shares, uint256 assets) {
+        RedemptionRequest storage r = requests[id];
+        exists = r.owner != address(0);
+        fulfilled = r.fulfilled;
+        claimed = r.claimed;
+        shares = r.amount;
+        assets = r.assetsLocked;
+    }
     // 1:1 conversions
     function convertToShares(uint256 assets) public view override returns (uint256) {
         return assets;
@@ -294,8 +361,8 @@ contract Pausable4626Vault is
     function maxWithdraw(address) public pure override returns (uint256) {
         return 0;
     }
-    function maxRedeem(address) public pure override returns (uint256) {
-        return 0;
+    function maxRedeem(address user) public view override returns (uint256) {
+        return balanceOf(user);
     }
     // Disable share-centric entry
     function maxMint(address) public pure override returns (uint256) {
@@ -305,6 +372,8 @@ contract Pausable4626Vault is
     function maxDeposit(address account) public view override returns (uint256) {
         if (paused()) return 0;
         if (userWhiteListActive && !userWhiteList[account]) return 0;
+        if (tvlCap < totalSupply()) return 0;
+        if (tvlCap < type(uint256).max) return tvlCap - totalSupply();
         return type(uint256).max;
     }
 
@@ -319,40 +388,27 @@ contract Pausable4626Vault is
         revert Disabled();
     }
 
-    function requestWithdrawAssets(
-        uint256 assets,
-        address receiver
-    ) external whenNotPaused returns (uint256 id, uint256 shares) {
-        return _request(assets, receiver);
+    /* internals */
+    function _deposit(address caller, address receiver, uint256 assets, uint256 shares) internal virtual override {
+        // If asset() is ERC-777, `transferFrom` can trigger a reentrancy BEFORE the transfer happens through the
+        // `tokensToSend` hook. On the other hand, the `tokenReceived` hook, that is triggered after the transfer,
+        // calls the vault, which is assumed not malicious.
+        //
+        // Conclusion: we need to do the transfer before we mint so that any reentrancy would happen before the
+        // assets are transferred and before the shares are minted, which is a valid state.
+        // slither-disable-next-line reentrancy-no-eth
+        uint256 bal0 = IERC20(asset()).balanceOf(address(this));
+        // pull assets in
+        IERC20(asset()).safeTransferFrom(msg.sender, address(this), assets);
+        uint256 received = IERC20(asset()).balanceOf(address(this)) - bal0;
+        require(received == assets, "RAM");
+        // kick capital to manager
+        _pushToManager(received);
+        // mint shares
+        _mint(receiver, shares);
+        emit Deposit(caller, receiver, assets, shares);
     }
 
-    function _request(uint256 shares, address receiver) internal returns (uint256 id, uint256 _shares) {
-        _shares = shares;
-
-        // 1) escrow shares in the vault
-        _spendAllowance(msg.sender, address(this), _shares);
-        _transfer(msg.sender, address(this), _shares);
-
-        // 2) record request
-        id = ++nextReqId;
-        requests[id] = Req({
-            shares: _shares,
-            owner: msg.sender,
-            receiver: receiver == address(0) ? msg.sender : receiver,
-            settled: false,
-            claimed: false
-        });
-
-        // 3) mint request NFT to the user
-        withdrawNFT.mintTo(msg.sender, id);
-
-        emit RequestCreated(id, msg.sender, _shares, receiver);
-    }
-
-    /**
-     * @dev Pull exactly `needed` assets from the manager into the vault.
-     *      Assumes the manager is configured to let THIS vault call `provideLiquidity`.
-     */
     function _pullFromManager(uint256 needed) internal {
         if (needed == 0) return;
         uint256 b0 = IERC20(asset()).balanceOf(address(this));
@@ -361,84 +417,30 @@ contract Pausable4626Vault is
         if (got < needed) revert Shortfall(needed, got);
     }
 
-    function claimWithdraw(uint256 id) external nonReentrant whenNotPaused {
-        Req storage r = requests[id];
-        require(r.owner == msg.sender, "CWO");
-        require(r.settled, "CWS");
-        require(!r.claimed, "CWC");
-        uint256 shares = uint256(r.shares);
-        r.claimed = true;
-        withdrawNFT.burn(id);
+    function _requestRedeem(address owner, address receiver, uint256 amount) internal returns (uint256 id) {
+        // 1) escrow in the vault
+        _spendAllowance(owner, address(this), amount);
+        _transfer(owner, address(this), amount);
 
-        // burn escrowed shares and send assets
-        _burn(address(this), shares);
-        IERC20(asset()).safeTransfer(r.receiver, shares);
-        amtRequested -= shares;
-        emit RequestClaimed(id, r.owner, r.receiver, shares);
+        // 2) record request
+        id = ++nextReqId;
+        requests[id] = RedemptionRequest({
+            amount: amount,
+            receiver: receiver == address(0) ? owner : receiver,
+            owner: owner,
+            fulfilled: false,
+            claimed: false,
+            assetsLocked: 0
+        });
+
+        emit RedeemRequestCreated(id, owner, receiver, amount);
     }
 
-    // fulfill from a pending request (escrowed shares are held by the vault)
-    function fulfillRequest(uint256 id) external nonReentrant whenNotPaused onlyFulfiller returns (uint256 assetsOut) {
-        Req storage r = requests[id];
-        require(!r.settled, "settled");
 
-        uint256 shares = uint256(r.shares);
-        assetsOut = shares; // 1:1
-
-        // ensure liquidity: pull from manager if needed
-        uint256 bal = IERC20(asset()).balanceOf(address(this));
-        amtRequested += assetsOut;
-        if (bal < amtRequested) {
-            _pullFromManager(amtRequested - bal); // must make funds available or revert
-        }
-
-        r.settled = true;
-        emit RequestFulfilled(id, r.owner, r.receiver, assetsOut);
-    }
-
-    /* ---- escape hatch ---- */
-
-    function withdrawToGov(address token, uint256 amount) external onlyOwner nonReentrant {
-        if (token == address(0)) {
-            (bool ok, ) = payable(owner()).call{value: amount}("");
-            require(ok, "ETH xfer fail");
-            emit EmergencyWithdraw(address(0), amount);
-        } else {
-            IERC20(token).safeTransfer(owner(), amount);
-            emit EmergencyWithdraw(token, amount);
-        }
-    }
     function mintRewards(uint256 shares) external onlyMinter whenNotPaused nonReentrant {
         _mint(rewarder, shares);
         emit RewardsMinted(rewarder, shares);
     }
-
-    // Replace the existing receive() function with this:
-    receive() external payable nonReentrant onlyWhiteListed whenNotPaused {
-        // If no ETH sent, do nothing
-        if (msg.value == 0) return;
-
-        if (address(asset()) != WETH) revert("ETH disabled");
-
-        if (address(asset()) == WETH) {
-            require(address(manager) != address(0), "manager not set");
-
-            // Wrap ETH to WETH
-            IWETH(WETH).deposit{value: msg.value}();
-
-            // Mint shares 1:1 with deposited amount
-            _mint(msg.sender, msg.value);
-
-            // Push wrapped ETH to manager
-            _pushToManager(msg.value);
-
-            // Emit the standard deposit event (you might want to add a specific event)
-            emit Deposit(msg.sender, msg.sender, msg.value, msg.value);
-        }
-        // If asset is not WETH, ETH just stays in contract (emergency withdrawal available)
-    }
-
-    /* ----------------------------- UUPS authorization -------------------------- */
 
     function _authorizeUpgrade(address newImplementation) internal override onlyOwner {}
 

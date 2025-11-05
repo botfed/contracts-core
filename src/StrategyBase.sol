@@ -11,6 +11,7 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 /* ---- Strategy interface expected by the manager ---- */
 interface IStrategy {
     function withdrawToManager(uint256 assets) external returns (uint256 withdrawn);
+    function assetToken() external view returns (IERC20);
 }
 
 /* ------------ Base strategy (upgradeable) ------------ */

@@ -50,10 +50,7 @@ contract DeployScript is Script {
         console.log("Config owner:", config.owner);
         console.log("Config treasury:", config.treasury);
 
-        require(
-            config.asset == USDC_BASE || config.asset == WETH_BASE,
-            "Asset not USDC or WETH"
-        );
+        require(config.asset == USDC_BASE || config.asset == WETH_BASE, "Asset not USDC or WETH");
 
         vm.startBroadcast();
 
@@ -65,7 +62,7 @@ contract DeployScript is Script {
         StrategyManager strategyManagerImpl = new StrategyManager();
 
         console.log("Deploying Pausable4626Vault implementation...");
-        Pausable4626Vault vaultImpl = new Pausable4626Vault(config.asset);
+        Pausable4626Vault vaultImpl = new Pausable4626Vault();
 
         // Deploy StrategyManager proxy
         console.log("Deploying StrategyManager proxy...");
@@ -74,10 +71,7 @@ contract DeployScript is Script {
             (IERC20(config.asset), deployer, config.treasury, config.exec)
         );
 
-        ERC1967Proxy strategyManagerProxy = new ERC1967Proxy(
-            address(strategyManagerImpl),
-            strategyManagerInitData
-        );
+        ERC1967Proxy strategyManagerProxy = new ERC1967Proxy(address(strategyManagerImpl), strategyManagerInitData);
 
         // Deploy Vault proxy
         console.log("Deploying Pausable4626Vault proxy...");
@@ -96,18 +90,12 @@ contract DeployScript is Script {
             )
         );
 
-        ERC1967Proxy vaultProxy = new ERC1967Proxy(
-            address(vaultImpl),
-            vaultInitData
-        );
+        ERC1967Proxy vaultProxy = new ERC1967Proxy(address(vaultImpl), vaultInitData);
 
         // Set vault address in strategy manager
         console.log("Setting vault address in StrategyManager...");
-        StrategyManager(payable(address(strategyManagerProxy))).setVault(
-            address(vaultProxy)
-        );
-        StrategyManager(payable(address(strategyManagerProxy)))
-            .transferOwnership(config.owner);
+        StrategyManager(payable(address(strategyManagerProxy))).setVault(address(vaultProxy));
+        StrategyManager(payable(address(strategyManagerProxy))).transferOwnership(config.owner);
 
         vm.stopBroadcast();
 
@@ -121,10 +109,7 @@ contract DeployScript is Script {
         console.log("Exec:", config.exec);
         console.log("Fulfiller:", config.fulfiller);
         console.log("\n=== IMPLEMENTATION CONTRACTS ===");
-        console.log(
-            "StrategyManager Implementation:",
-            address(strategyManagerImpl)
-        );
+        console.log("StrategyManager Implementation:", address(strategyManagerImpl));
         console.log("Pausable4626Vault Implementation:", address(vaultImpl));
         console.log("\n=== PROXY CONTRACTS ===");
         console.log("StrategyManager Proxy:", address(strategyManagerProxy));
@@ -132,12 +117,8 @@ contract DeployScript is Script {
 
         // Verify deployment
         console.log("\n=== VERIFICATION ===");
-        StrategyManager sm = StrategyManager(
-            payable(address(strategyManagerProxy))
-        );
-        Pausable4626Vault vault = Pausable4626Vault(
-            payable(address(vaultProxy))
-        );
+        StrategyManager sm = StrategyManager(payable(address(strategyManagerProxy)));
+        Pausable4626Vault vault = Pausable4626Vault(payable(address(vaultProxy)));
 
         console.log("StrategyManager asset:", address(sm.asset()));
         console.log("StrategyManager owner:", sm.owner());
@@ -161,9 +142,7 @@ contract DeployScript is Script {
         console.log("VAULT=", address(vaultProxy));
     }
 
-    function getDeployConfig(
-        address deployer
-    ) internal view returns (DeployConfig memory) {
+    function getDeployConfig(address deployer) internal view returns (DeployConfig memory) {
         // Try to get config from environment variables, default to deployer
         address owner = vm.envAddress("BF_GOV");
         address treasury = vm.envAddress("BF_TREASURY");
@@ -174,15 +153,10 @@ contract DeployScript is Script {
         address exec = vm.envAddress("BF_STRAT_MANAGER_EXEC");
         address asset = vm.envAddress("ASSET");
 
-        require(
-            asset == USDC_BASE || asset == WETH_BASE,
-            "Asset not USDC or WETH"
-        );
+        require(asset == USDC_BASE || asset == WETH_BASE, "Asset not USDC or WETH");
 
         string memory vaultSymbol = (asset == WETH_BASE ? "botETH" : "botUSD");
-        string memory vaultName = (
-            asset == WETH_BASE ? "BotFed ETH" : "BotFed USD"
-        );
+        string memory vaultName = (asset == WETH_BASE ? "BotFed ETH" : "BotFed USD");
 
         return
             DeployConfig({
@@ -240,10 +214,7 @@ contract DeployScript is Script {
         // This verifies it's a real, active WETH contract and not a fake
         uint256 ethBalance = wethAddr.balance;
         console.log("WETH contract ETH balance:", ethBalance / 1e18, "ETH");
-        require(
-            ethBalance >= 1000 ether,
-            "WETH contract has less than 1000 ETH - possibly fake or inactive"
-        );
+        require(ethBalance >= 1000 ether, "WETH contract has less than 1000 ETH - possibly fake or inactive");
         console.log("WETH contract has sufficient ETH backing (>=1000 ETH)");
 
         // Additional sanity check - try ERC20 balanceOf call
@@ -280,13 +251,10 @@ contract DeployVaultImpl is Script {
 
         // Use same selection logic as main script
         address asset = vm.envAddress("ASSET");
-        require(
-            asset == USDC_BASE || asset == WETH_BASE,
-            "Asset not USDC or WETH"
-        );
+        require(asset == USDC_BASE || asset == WETH_BASE, "Asset not USDC or WETH");
 
         vm.startBroadcast(pk);
-        Pausable4626Vault impl = new Pausable4626Vault(asset);
+        Pausable4626Vault impl = new Pausable4626Vault();
         vm.stopBroadcast();
 
         console.log("Deployed Vault implementation (asset-bound):");

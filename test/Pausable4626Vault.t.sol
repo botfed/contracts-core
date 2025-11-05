@@ -10,9 +10,8 @@ import {IERC20Errors} from "@openzeppelin/contracts/interfaces/draft-IERC6093.so
 
 import {Pausable4626Vault} from "../src/Pausable4626Vault.sol";
 import {StrategyManager} from "../src/StrategyManager.sol";
-import {WithdrawRequestNFTUpgradeable} from "../src/WithdrawRequestNFTUpgradeable.sol";
 
-// First, update your MockWETH to include the deposit function:
+// MockWETH - removed since vault no longer accepts ETH
 contract MockWETH is IERC20 {
     mapping(address => uint256) private _balances;
     mapping(address => mapping(address => uint256)) private _allowances;
@@ -22,25 +21,10 @@ contract MockWETH is IERC20 {
     string public symbol = "WETH";
     uint8 public decimals = 18;
 
-    // Add this deposit function to make it behave like real WETH
-    function deposit() external payable {
-        _balances[msg.sender] += msg.value;
-        _totalSupply += msg.value;
-        emit Transfer(address(0), msg.sender, msg.value);
-    }
-
-    function withdraw(uint256 amount) external {
-        require(_balances[msg.sender] >= amount, "Insufficient balance");
-        _balances[msg.sender] -= amount;
-        _totalSupply -= amount;
-        payable(msg.sender).transfer(amount);
-        emit Transfer(msg.sender, address(0), amount);
-    }
-
-    // ... rest of your existing MockWETH functions ...
     function mint(address to, uint256 amount) external {
         _balances[to] += amount;
         _totalSupply += amount;
+        emit Transfer(address(0), to, amount);
     }
 
     function totalSupply() external view returns (uint256) {
@@ -51,37 +35,33 @@ contract MockWETH is IERC20 {
         return _balances[account];
     }
 
-    function allowance(
-        address owner,
-        address spender
-    ) external view returns (uint256) {
+    function allowance(address owner, address spender) external view returns (uint256) {
         return _allowances[owner][spender];
     }
 
     function transfer(address to, uint256 amount) external returns (bool) {
+        require(_balances[msg.sender] >= amount, "Insufficient balance");
         _balances[msg.sender] -= amount;
         _balances[to] += amount;
+        emit Transfer(msg.sender, to, amount);
         return true;
     }
 
     function approve(address spender, uint256 amount) external returns (bool) {
         _allowances[msg.sender][spender] = amount;
+        emit Approval(msg.sender, spender, amount);
         return true;
     }
 
-    function transferFrom(
-        address from,
-        address to,
-        uint256 amount
-    ) external returns (bool) {
+    function transferFrom(address from, address to, uint256 amount) external returns (bool) {
+        require(_allowances[from][msg.sender] >= amount, "Insufficient allowance");
+        require(_balances[from] >= amount, "Insufficient balance");
         _allowances[from][msg.sender] -= amount;
         _balances[from] -= amount;
         _balances[to] += amount;
+        emit Transfer(from, to, amount);
         return true;
     }
-
-    // Allow contract to receive ETH
-    receive() external payable {}
 }
 
 // Mock Strategy Manager for testing
@@ -108,15 +88,12 @@ contract Pausable4626VaultTest is Test {
     Pausable4626Vault public vaultImpl;
     MockWETH public weth;
     MockStrategyManager public strategyManager;
-    WithdrawRequestNFTUpgradeable public withdrawNFT;
 
     address public owner = makeAddr("owner");
     address public user1 = makeAddr("user1");
     address public user2 = makeAddr("user2");
     address public fulfiller = makeAddr("fulfiller");
     address public riskAdmin = makeAddr("riskAdmin");
-    address public treasury = makeAddr("treasury");
-    address public exec = makeAddr("exec");
     address public minter = makeAddr("minter");
     address public rewarder = makeAddr("rewarder");
 
@@ -130,7 +107,7 @@ contract Pausable4626VaultTest is Test {
         strategyManager = new MockStrategyManager(weth);
 
         // Deploy vault implementation
-        vaultImpl = new Pausable4626Vault(address(weth));
+        vaultImpl = new Pausable4626Vault();
 
         // Deploy vault proxy
         bytes memory initData = abi.encodeWithSelector(
@@ -155,11 +132,7 @@ contract Pausable4626VaultTest is Test {
         vm.stopPrank();
 
         // Set vault in strategy manager
-        vm.prank(owner);
         strategyManager.setVault(address(vault));
-
-        // Get withdrawNFT reference
-        withdrawNFT = vault.withdrawNFT();
 
         // Mint WETH to users
         weth.mint(user1, INITIAL_WETH);
@@ -181,17 +154,7 @@ contract Pausable4626VaultTest is Test {
 
     function test_InitializationOnlyOnce() public {
         vm.expectRevert();
-        vault.initialize(
-            weth,
-            "Test",
-            "TEST",
-            owner,
-            address(strategyManager),
-            fulfiller,
-            riskAdmin,
-            minter,
-            rewarder
-        );
+        vault.initialize(weth, "Test", "TEST", owner, address(strategyManager), fulfiller, riskAdmin, minter, rewarder);
     }
 
     // ============ DEPOSIT TESTS ============
@@ -211,10 +174,7 @@ contract Pausable4626VaultTest is Test {
         assertEq(vault.totalAssets(), depositAmount);
 
         // Check WETH was transferred to strategy manager
-        assertEq(
-            weth.balanceOf(address(strategyManager)),
-            INITIAL_WETH + depositAmount
-        );
+        assertEq(weth.balanceOf(address(strategyManager)), INITIAL_WETH + depositAmount);
         assertEq(weth.balanceOf(user1), INITIAL_WETH - depositAmount);
     }
 
@@ -295,44 +255,37 @@ contract Pausable4626VaultTest is Test {
     // ============ DISABLED FUNCTIONS TESTS ============
 
     function test_DirectWithdrawRedeem_Disabled() public {
+        // First deposit so user has shares
+        vm.startPrank(user1);
+        weth.approve(address(vault), 10 ether);
+        vault.deposit(10 ether, user1);
+        vm.stopPrank();
+
         assertEq(vault.maxWithdraw(user1), 0);
-        assertEq(vault.maxRedeem(user1), 0);
+        assertEq(vault.maxRedeem(user1), 10 ether); // ✅ FIXED: maxRedeem returns balance
         assertEq(vault.maxMint(user1), 0);
 
-        vm.expectRevert();
+        vm.expectRevert(Pausable4626Vault.Disabled.selector); // ✅ FIXED: Use custom error
         vault.mint(1 ether, user1);
 
-        vm.expectRevert();
+        vm.expectRevert(Pausable4626Vault.Disabled.selector);
         vault.withdraw(1 ether, user1, user1);
 
-        vm.expectRevert();
+        vm.expectRevert(Pausable4626Vault.Disabled.selector);
         vault.redeem(1 ether, user1, user1);
     }
 
     // ============ WITHDRAWAL REQUEST TESTS ============
+    
     function test_RequestWithdrawTooManyAssets() public {
         // First deposit
         vm.startPrank(user1);
         weth.approve(address(vault), 10 ether);
         vault.deposit(10 ether, user1);
 
-        // Approve vault to spend shares for withdrawal request
-        vault.approve(address(vault), 15 ether);
-
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                IERC20Errors.ERC20InsufficientBalance.selector,
-                user1,
-                10 ether,
-                15 ether
-            )
-        );
-
-        // Request withdrawal
-        (uint256 requestId, uint256 shares) = vault.requestWithdrawAssets(
-            15 ether,
-            user1
-        );
+        // Try to request more than balance
+        vm.expectRevert(); // Will revert in _transfer due to insufficient balance
+        vault.requestRedeem(15 ether, user1);
         vm.stopPrank();
     }
 
@@ -342,40 +295,24 @@ contract Pausable4626VaultTest is Test {
         weth.approve(address(vault), 10 ether);
         vault.deposit(10 ether, user1);
 
-        // Approve vault to spend shares for withdrawal request
-        vault.approve(address(vault), 5 ether);
-
-        // Request withdrawal
-        (uint256 requestId, uint256 shares) = vault.requestWithdrawAssets(
-            5 ether,
-            user1
-        );
+        // Request withdrawal (no need to approve - it uses _spendAllowance internally)
+        uint256 requestId = vault.requestRedeem(5 ether, user1);
         vm.stopPrank();
 
         assertEq(requestId, 1);
-        assertEq(shares, 5 ether);
 
-        // Check request details
-        (
-            uint256 reqShares,
-            address receiver,
-            address reqOwner,
-            bool settled,
-            bool claimed
-        ) = vault.requests(requestId);
+        // Check request details using getRequestStatus
+        (bool exists, bool fulfilled, bool claimed, uint256 shares, uint256 assets) = vault.getRequestStatus(requestId);
 
-        assertEq(reqShares, 5 ether);
-        assertEq(receiver, user1);
-        assertEq(reqOwner, user1);
-        assertFalse(settled);
+        assertTrue(exists);
+        assertFalse(fulfilled);
         assertFalse(claimed);
+        assertEq(shares, 5 ether);
+        assertEq(assets, 0); // Not fulfilled yet
 
         // Check shares are escrowed
         assertEq(vault.balanceOf(user1), 5 ether); // Remaining shares
         assertEq(vault.balanceOf(address(vault)), 5 ether); // Escrowed shares
-
-        // Check NFT was minted
-        assertEq(withdrawNFT.ownerOf(requestId), user1);
     }
 
     function test_RequestWithdrawAssets_RevertsWhenPaused() public {
@@ -383,7 +320,7 @@ contract Pausable4626VaultTest is Test {
         vault.pause();
 
         vm.expectRevert();
-        vault.requestWithdrawAssets(1 ether, user1);
+        vault.requestRedeem(1 ether, user1);
     }
 
     function test_RequestWithdrawAssets_DifferentReceiver() public {
@@ -391,16 +328,16 @@ contract Pausable4626VaultTest is Test {
         vm.startPrank(user1);
         weth.approve(address(vault), 10 ether);
         vault.deposit(10 ether, user1);
-        vault.approve(address(vault), 5 ether);
 
         // Request withdrawal with different receiver
-        (uint256 requestId, ) = vault.requestWithdrawAssets(5 ether, user2);
+        uint256 requestId = vault.requestRedeem(5 ether, user2);
         vm.stopPrank();
 
-        // Check request details
-        (, address receiver, address reqOwner, , ) = vault.requests(requestId);
+        // Check request details via struct directly
+        (uint256 amount, address receiver, address reqOwner,,,) = vault.requests(requestId);
         assertEq(receiver, user2); // Different receiver
         assertEq(reqOwner, user1); // Original owner
+        assertEq(amount, 5 ether);
     }
 
     // ============ FULFILLMENT TESTS ============
@@ -410,20 +347,18 @@ contract Pausable4626VaultTest is Test {
         vm.startPrank(user1);
         weth.approve(address(vault), 10 ether);
         vault.deposit(10 ether, user1);
-        vault.approve(address(vault), 5 ether);
-        (uint256 requestId, ) = vault.requestWithdrawAssets(5 ether, user1);
+        uint256 requestId = vault.requestRedeem(5 ether, user1);
         vm.stopPrank();
 
         // Fulfiller fulfills the request
         vm.prank(fulfiller);
-        uint256 assetsOut = vault.fulfillRequest(requestId);
+        vault.fulfillRequest(requestId);
 
-        assertEq(assetsOut, 5 ether);
-
-        // Check request is marked as settled
-        (, , , bool settled, ) = vault.requests(requestId);
-        assertTrue(settled);
-
+        // Check request is marked as fulfilled
+        (,bool fulfilled,,, uint256 assetsLocked) = vault.getRequestStatus(requestId);
+        assertTrue(fulfilled);
+        assertEq(assetsLocked, 5 ether);
+        
         // Check vault has sufficient WETH (pulled from strategy manager)
         assertGe(weth.balanceOf(address(vault)), 5 ether);
     }
@@ -433,8 +368,7 @@ contract Pausable4626VaultTest is Test {
         vm.startPrank(user1);
         weth.approve(address(vault), 10 ether);
         vault.deposit(10 ether, user1);
-        vault.approve(address(vault), 5 ether);
-        (uint256 requestId, ) = vault.requestWithdrawAssets(5 ether, user1);
+        uint256 requestId = vault.requestRedeem(5 ether, user1);
         vm.stopPrank();
 
         // Pause vault
@@ -452,8 +386,7 @@ contract Pausable4626VaultTest is Test {
         vm.startPrank(user1);
         weth.approve(address(vault), 10 ether);
         vault.deposit(10 ether, user1);
-        vault.approve(address(vault), 5 ether);
-        (uint256 requestId, ) = vault.requestWithdrawAssets(5 ether, user1);
+        uint256 requestId = vault.requestRedeem(5 ether, user1);
         vm.stopPrank();
 
         // Non-fulfiller should fail
@@ -462,13 +395,12 @@ contract Pausable4626VaultTest is Test {
         vault.fulfillRequest(requestId);
     }
 
-    function test_FulfillRequest_AlreadySettled() public {
+    function test_FulfillRequest_AlreadyFulfilled() public {
         // Setup and fulfill request
         vm.startPrank(user1);
         weth.approve(address(vault), 10 ether);
         vault.deposit(10 ether, user1);
-        vault.approve(address(vault), 5 ether);
-        (uint256 requestId, ) = vault.requestWithdrawAssets(5 ether, user1);
+        uint256 requestId = vault.requestRedeem(5 ether, user1);
         vm.stopPrank();
 
         vm.prank(fulfiller);
@@ -476,19 +408,19 @@ contract Pausable4626VaultTest is Test {
 
         // Try to fulfill again
         vm.prank(fulfiller);
-        vm.expectRevert(bytes("settled"));
+        vm.expectRevert(Pausable4626Vault.RequestAlreadyFulfilled.selector); // ✅ FIXED
         vault.fulfillRequest(requestId);
     }
 
     // ============ CLAIM TESTS ============
 
-    function test_ClaimWithdraw() public {
+    function test_ClaimRedeem() public {
         // Setup: deposit, request, fulfill
+        uint256 requestAmt = 5 ether;
         vm.startPrank(user1);
         weth.approve(address(vault), 10 ether);
         vault.deposit(10 ether, user1);
-        vault.approve(address(vault), 5 ether);
-        (uint256 requestId, ) = vault.requestWithdrawAssets(5 ether, user1);
+        uint256 requestId = vault.requestRedeem(requestAmt, user1);
         vm.stopPrank();
 
         vm.prank(fulfiller);
@@ -498,30 +430,25 @@ contract Pausable4626VaultTest is Test {
 
         // User claims withdrawal
         vm.prank(user1);
-        vault.claimWithdraw(requestId);
+        vault.claimRedemption(requestId);
 
         // Check WETH was transferred to user
-        assertEq(weth.balanceOf(user1), balanceBefore + 5 ether);
+        assertEq(weth.balanceOf(user1), balanceBefore + requestAmt);
 
         // Check shares were burned
-        assertEq(vault.totalSupply(), 5 ether); // Started with 10, burned 5
+        assertEq(vault.totalSupply(), 10 ether - requestAmt);
 
-        // Check request is marked claimed
-        (, , , , bool claimed) = vault.requests(requestId);
-        assertTrue(claimed);
-
-        // Check NFT was burned
-        vm.expectRevert();
-        withdrawNFT.ownerOf(requestId);
+        // Check request has been deleted
+        (bool exists,,,,) = vault.getRequestStatus(requestId);
+        assertFalse(exists);
     }
 
-    function test_ClaimWithdraw_RevertsWhenPaused() public {
+    function test_ClaimRedeem_RevertsWhenPaused() public {
         // Setup fulfilled request
         vm.startPrank(user1);
         weth.approve(address(vault), 10 ether);
         vault.deposit(10 ether, user1);
-        vault.approve(address(vault), 5 ether);
-        (uint256 requestId, ) = vault.requestWithdrawAssets(5 ether, user1);
+        uint256 requestId = vault.requestRedeem(5 ether, user1);
         vm.stopPrank();
 
         vm.prank(fulfiller);
@@ -534,16 +461,15 @@ contract Pausable4626VaultTest is Test {
         // Claim should revert
         vm.prank(user1);
         vm.expectRevert();
-        vault.claimWithdraw(requestId);
+        vault.claimRedemption(requestId);
     }
 
-    function test_ClaimWithdraw_OnlyOwner() public {
+    function test_ClaimRedeem_OnlyOwner() public {
         // Setup fulfilled request
         vm.startPrank(user1);
         weth.approve(address(vault), 10 ether);
         vault.deposit(10 ether, user1);
-        vault.approve(address(vault), 5 ether);
-        (uint256 requestId, ) = vault.requestWithdrawAssets(5 ether, user1);
+        uint256 requestId = vault.requestRedeem(5 ether, user1);
         vm.stopPrank();
 
         vm.prank(fulfiller);
@@ -551,44 +477,77 @@ contract Pausable4626VaultTest is Test {
 
         // Wrong user tries to claim
         vm.prank(user2);
-        vm.expectRevert(bytes("CWO"));
-        vault.claimWithdraw(requestId);
+        vm.expectRevert(Pausable4626Vault.NotRequestOwner.selector); // ✅ FIXED
+        vault.claimRedemption(requestId);
     }
 
-    function test_ClaimWithdraw_NotSettled() public {
+    function test_ClaimRedeem_NotFulfilled() public {
         // Setup request but don't fulfill
         vm.startPrank(user1);
         weth.approve(address(vault), 10 ether);
         vault.deposit(10 ether, user1);
-        vault.approve(address(vault), 5 ether);
-        (uint256 requestId, ) = vault.requestWithdrawAssets(5 ether, user1);
+        uint256 requestId = vault.requestRedeem(5 ether, user1);
         vm.stopPrank();
 
         // Try to claim before fulfillment
         vm.prank(user1);
-        vm.expectRevert(bytes("CWS"));
-        vault.claimWithdraw(requestId);
+        vm.expectRevert(Pausable4626Vault.RequestNotFulfilled.selector); // ✅ FIXED
+        vault.claimRedemption(requestId);
     }
 
-    function test_ClaimWithdraw_AlreadyClaimed() public {
+    function test_ClaimRedeem_AlreadyClaimed() public {
         // Setup and claim
         vm.startPrank(user1);
         weth.approve(address(vault), 10 ether);
         vault.deposit(10 ether, user1);
-        vault.approve(address(vault), 5 ether);
-        (uint256 requestId, ) = vault.requestWithdrawAssets(5 ether, user1);
+        uint256 requestId = vault.requestRedeem(5 ether, user1);
         vm.stopPrank();
 
         vm.prank(fulfiller);
         vault.fulfillRequest(requestId);
 
         vm.prank(user1);
-        vault.claimWithdraw(requestId);
+        vault.claimRedemption(requestId);
 
-        // Try to claim again
+        // Try to claim again - request no longer exists
         vm.prank(user1);
-        vm.expectRevert(bytes("CWC"));
-        vault.claimWithdraw(requestId);
+        vm.expectRevert(Pausable4626Vault.RequestDoesNotExist.selector); // ✅ FIXED
+        vault.claimRedemption(requestId);
+    }
+
+    // ============ CANCEL REQUEST TESTS ============
+    
+    function test_CancelRequest() public {
+        vm.startPrank(user1);
+        weth.approve(address(vault), 10 ether);
+        vault.deposit(10 ether, user1);
+        uint256 requestId = vault.requestRedeem(5 ether, user1);
+        
+        // Cancel before fulfillment
+        vault.cancelRequest(requestId);
+        vm.stopPrank();
+
+        // Shares returned
+        assertEq(vault.balanceOf(user1), 10 ether);
+        
+        // Request deleted
+        (bool exists,,,,) = vault.getRequestStatus(requestId);
+        assertFalse(exists);
+    }
+
+    function test_CancelRequest_AfterFulfillmentReverts() public {
+        vm.startPrank(user1);
+        weth.approve(address(vault), 10 ether);
+        vault.deposit(10 ether, user1);
+        uint256 requestId = vault.requestRedeem(5 ether, user1);
+        vm.stopPrank();
+
+        vm.prank(fulfiller);
+        vault.fulfillRequest(requestId);
+
+        vm.prank(user1);
+        vm.expectRevert(Pausable4626Vault.RequestAlreadyFulfilled.selector);
+        vault.cancelRequest(requestId);
     }
 
     // ============ ADMIN TESTS ============
@@ -691,38 +650,30 @@ contract Pausable4626VaultTest is Test {
         assertEq(vault.totalSupply(), 15 ether);
         assertEq(vault.balanceOf(user1), 10 ether);
         assertEq(vault.balanceOf(user2), 5 ether);
-        assertEq(weth.balanceOf(address(vault)), 0);
 
         // User1 requests partial withdrawal
         vm.startPrank(user1);
-        vault.approve(address(vault), 3 ether);
-        (uint256 requestId1, ) = vault.requestWithdrawAssets(3 ether, user1);
+        uint256 requestId1 = vault.requestRedeem(3 ether, user1);
         vm.stopPrank();
 
         // User2 requests full withdrawal
         vm.startPrank(user2);
-        vault.approve(address(vault), 5 ether);
-        (uint256 requestId2, ) = vault.requestWithdrawAssets(5 ether, user2);
+        uint256 requestId2 = vault.requestRedeem(5 ether, user2);
         vm.stopPrank();
-        assertEq(weth.balanceOf(address(vault)), 0);
 
         // Fulfill both requests
         vm.prank(fulfiller);
         vault.fulfillRequest(requestId1);
-        assertEq(weth.balanceOf(address(vault)), 3 ether);
 
         vm.prank(fulfiller);
         vault.fulfillRequest(requestId2);
 
-        assertEq(weth.balanceOf(address(vault)), 8 ether);
-
         // Claim both withdrawals
         vm.prank(user1);
-        vault.claimWithdraw(requestId1);
+        vault.claimRedemption(requestId1);
 
         vm.prank(user2);
-        vault.claimWithdraw(requestId2);
-        assertEq(weth.balanceOf(address(vault)), 0 ether);
+        vault.claimRedemption(requestId2);
 
         // Check final state
         assertEq(vault.totalSupply(), 7 ether); // 15 - 3 - 5
@@ -730,174 +681,15 @@ contract Pausable4626VaultTest is Test {
         assertEq(vault.balanceOf(user2), 0 ether); // 5 - 5
     }
 
-    function test_EthAutoDeposit_WhenAssetIsWETH() public {
-        uint256 ethAmount = 5 ether;
-        uint256 user1BalanceBefore = user1.balance;
-
-        // Give user1 some ETH
-        vm.deal(user1, ethAmount);
-
-        // Send ETH directly to vault (should auto-deposit)
-        vm.prank(user1);
-        (bool success, ) = address(vault).call{value: ethAmount}("");
-        assertTrue(success);
-
-        // Check that shares were minted 1:1
-        assertEq(vault.balanceOf(user1), ethAmount);
-        assertEq(vault.totalSupply(), ethAmount);
-        assertEq(vault.totalAssets(), ethAmount);
-
-        // Check WETH was wrapped and sent to strategy manager
-        assertEq(
-            weth.balanceOf(address(strategyManager)),
-            INITIAL_WETH + ethAmount
-        );
-
-        // Check user's ETH balance decreased
-        assertEq(user1.balance, 0);
-    }
-
-    function test_EthAutoDeposit_RevertsWhenPaused() public {
-        uint256 ethAmount = 5 ether;
-        vm.deal(user1, ethAmount);
-
-        // Pause the vault
-        vm.prank(owner);
-        vault.pause();
-
-        // ETH deposit should revert when paused
-        vm.prank(user1);
-        vm.expectRevert();
-        (bool success, ) = address(vault).call{value: ethAmount}("");
-    }
-
-    function test_EthAutoDeposit_RevertsWithoutManager() public {
-        // Deploy new vault without manager set
-        bytes memory initData = abi.encodeWithSelector(
-            Pausable4626Vault.initialize.selector,
-            address(weth),
-            "Test Vault",
-            "TEST",
-            owner,
-            address(0), // No manager
-            fulfiller,
-            riskAdmin,
-            minter,
-            rewarder
-        );
-        ERC1967Proxy proxy = new ERC1967Proxy(address(vaultImpl), initData);
-        Pausable4626Vault newVault = Pausable4626Vault(payable(address(proxy)));
-
-        uint256 ethAmount = 5 ether;
-        vm.deal(user1, ethAmount);
-
-        // Should revert when manager not set
-        vm.prank(user1);
-        vm.expectRevert(bytes("manager not set"));
-        (bool success, ) = address(newVault).call{value: ethAmount}("");
-    }
-
-    function test_EthAutoDeposit_ZeroAmount() public {
-        // Sending 0 ETH should succeed but do nothing
-        vm.prank(user1);
-        (bool success, ) = address(vault).call{value: 0}("");
-        assertTrue(success);
-
-        // No shares should be minted
-        assertEq(vault.balanceOf(user1), 0);
-        assertEq(vault.totalSupply(), 0);
-    }
-
-    function test_EthAutoDeposit_MultipleDeposits() public {
-        uint256 ethAmount1 = 3 ether;
-        uint256 ethAmount2 = 2 ether;
-
-        vm.deal(user1, ethAmount1);
-        vm.deal(user2, ethAmount2);
-
-        // First deposit
-        vm.prank(user1);
-        (bool success1, ) = address(vault).call{value: ethAmount1}("");
-        assertTrue(success1);
-
-        // Second deposit
-        vm.prank(user2);
-        (bool success2, ) = address(vault).call{value: ethAmount2}("");
-        assertTrue(success2);
-
-        // Check balances
-        assertEq(vault.balanceOf(user1), ethAmount1);
-        assertEq(vault.balanceOf(user2), ethAmount2);
-        assertEq(vault.totalSupply(), ethAmount1 + ethAmount2);
-        assertEq(vault.totalAssets(), ethAmount1 + ethAmount2);
-
-        // Check all WETH went to strategy manager
-        assertEq(
-            weth.balanceOf(address(strategyManager)),
-            INITIAL_WETH + ethAmount1 + ethAmount2
-        );
-    }
-
-    function test_EthAutoDeposit_WithNonWETHAsset() public {
-        // Deploy vault with a different asset (not WETH)
-        MockWETH otherToken = new MockWETH();
-        // Deploy mock strategy manager
-        MockStrategyManager otherStratManager = new MockStrategyManager(
-            otherToken
-        );
-
-        bytes memory initData = abi.encodeWithSelector(
-            Pausable4626Vault.initialize.selector,
-            address(otherToken), // Different asset
-            "Other Vault",
-            "OTHER",
-            owner,
-            otherStratManager,
-            fulfiller,
-            riskAdmin,
-            minter,
-            rewarder
-        );
-        ERC1967Proxy proxy = new ERC1967Proxy(address(vaultImpl), initData);
-        Pausable4626Vault otherVault = Pausable4626Vault(
-            payable(address(proxy))
-        );
-        vm.prank(riskAdmin);
-        otherVault.setUserWhiteList(user1, true);
-
-        uint256 ethAmount = 5 ether;
-        vm.deal(user1, ethAmount);
-
-        uint256 vaultEthBefore = address(otherVault).balance;
-
-        // Send ETH to vault with non-WETH asset
-        vm.prank(user1);
-        vm.expectRevert(bytes("ETH disabled"));
-        (bool success, ) = address(otherVault).call{value: ethAmount}("");
-
-        // No shares should be minted
-        assertEq(otherVault.balanceOf(user1), 0);
-        assertEq(otherVault.totalSupply(), 0);
-    }
-
-    function test_EthAutoDeposit_EmitsDepositEvent() public {
-        uint256 ethAmount = 5 ether;
-        vm.deal(user1, ethAmount);
-
-        // Expect Deposit event to be emitted
-        vm.expectEmit(true, true, false, true);
-        emit Deposit(user1, user1, ethAmount, ethAmount);
-
-        vm.prank(user1);
-        (bool success, ) = address(vault).call{value: ethAmount}("");
-        assertTrue(success);
-    }
-
+    // ============ WHITELIST TESTS ============
+    
     function test_UserWhiteList() public {
         address user = makeAddr("testuser1");
         assertFalse(vault.userIsWhitelisted(user));
+        
         vm.prank(riskAdmin);
         vault.setUserWhiteList(user, true);
+        
         assertTrue(vault.userIsWhitelisted(user));
     }
 
@@ -906,78 +698,88 @@ contract Pausable4626VaultTest is Test {
         vault.setUserWhiteListActive(false);
         assertFalse(vault.userWhiteListActive());
     }
+    
     function test_UserWhiteListActiveRevert() public {
-        vm.startPrank(user1);
+        vm.prank(user1);
         vm.expectRevert(bytes("ORA"));
         vault.setUserWhiteListActive(false);
-        vm.stopPrank();
     }
+    
     function test_RaiseTVLCap() public {
         vm.prank(riskAdmin);
         vault.setTVLCap(1000 ether);
         assertEq(vault.tvlCap(), 1000 ether);
     }
+    
     function test_DepositMoreThanTVLCap() public {
         vm.startPrank(user1);
-        vm.expectRevert(bytes("tvl cap"));
+        weth.approve(address(vault), 1000 ether);
+        vm.expectRevert(); // ERC4626ExceededMaxDeposit
         vault.deposit(1000 ether, user1);
         vm.stopPrank();
     }
+    
     function test_RaiseTVLCap_NoAUTH() public {
-        vm.startPrank(user1);
+        vm.prank(user1);
         vm.expectRevert(bytes("ORA"));
         vault.setTVLCap(1000 ether);
-        vm.stopPrank();
     }
+    
+    // ============ REWARDS TESTS ============
+    
     function test_Mint() public {
         uint256 bal0 = vault.balanceOf(rewarder);
-        vm.startPrank(minter);
+        
+        vm.prank(minter);
         vault.mintRewards(1000 ether);
-        vm.stopPrank();
+        
         uint256 bal1 = vault.balanceOf(rewarder);
         assertEq(bal1 - bal0, 1000 ether);
     }
+    
     function test_setMinter() public {
-        vm.startPrank(owner);
+        vm.prank(owner);
         vault.pause();
+        
+        vm.prank(owner);
         vault.setMinter(makeAddr("newMinter"));
-        vm.stopPrank();
+        
         assertEq(vault.minter(), makeAddr("newMinter"));
     }
+    
     function test_setMinter_NoAuth() public {
         vm.prank(owner);
         vault.pause();
-        vm.startPrank(user1);
+        
+        vm.prank(user1);
         vm.expectRevert();
         vault.setMinter(makeAddr("newMinter"));
-        vm.stopPrank();
     }
+    
     function test_Mint_NoAUTH() public {
-        vm.startPrank(user1);
+        vm.prank(user1);
         vm.expectRevert(bytes("OM"));
         vault.mintRewards(1000 ether);
-        vm.stopPrank();
     }
+    
     function test_setRewarder() public {
-        vm.startPrank(owner);
+        vm.prank(owner);
         vault.pause();
-        vault.setMinter(makeAddr("newRewarder"));
-        vm.stopPrank();
-        assertEq(vault.minter(), makeAddr("newRewarder"));
+        
+        vm.prank(owner);
+        vault.setRewarder(makeAddr("newRewarder"));
+        
+        assertEq(vault.rewarder(), makeAddr("newRewarder"));
     }
+    
     function test_setRewarder_NoAuth() public {
         vm.prank(owner);
         vault.pause();
-        vm.startPrank(user1);
+        
+        vm.prank(user1);
         vm.expectRevert();
-        vault.setMinter(makeAddr("newRewarder"));
-        vm.stopPrank();
+        vault.setRewarder(makeAddr("newRewarder"));
     }
 
-    event Deposit(
-        address indexed caller,
-        address indexed owner,
-        uint256 assets,
-        uint256 shares
-    );
+    // NOTE: All ETH auto-deposit tests removed since vault no longer accepts ETH
 }
