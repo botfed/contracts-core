@@ -27,7 +27,6 @@ contract DeployScript is Script {
         address owner; // Contract owner
         address treasury; // Treasury address for fees
         address exec; // Executor address
-        address fulfiller; // Fulfiller address for vault
         address riskAdmin; // riskAdmin address for vault
         address minter;
         address rewarder;
@@ -82,11 +81,7 @@ contract DeployScript is Script {
                 config.vaultName,
                 config.vaultSymbol,
                 config.owner,
-                address(strategyManagerProxy),
-                config.fulfiller,
-                config.riskAdmin,
-                config.minter,
-                config.rewarder
+                address(strategyManagerProxy)
             )
         );
 
@@ -107,7 +102,6 @@ contract DeployScript is Script {
         console.log("Owner:", config.owner);
         console.log("Treasury:", config.treasury);
         console.log("Exec:", config.exec);
-        console.log("Fulfiller:", config.fulfiller);
         console.log("\n=== IMPLEMENTATION CONTRACTS ===");
         console.log("StrategyManager Implementation:", address(strategyManagerImpl));
         console.log("Pausable4626Vault Implementation:", address(vaultImpl));
@@ -131,7 +125,6 @@ contract DeployScript is Script {
         console.log("Vault asset:", address(vault.asset()));
         console.log("Vault owner:", vault.owner());
         console.log("Vault manager:", address(vault.manager()));
-        console.log("Vault fulfiller:", vault.fulfiller());
         console.log("Vault paused:", vault.paused());
 
         console.log("\n=== SAVE THESE ADDRESSES ===");
@@ -146,7 +139,6 @@ contract DeployScript is Script {
         // Try to get config from environment variables, default to deployer
         address owner = vm.envAddress("BF_GOV");
         address treasury = vm.envAddress("BF_TREASURY");
-        address fulfiller = vm.envAddress("BF_FULFILLER");
         address riskAdmin = vm.envAddress("BF_RISK_ADMIN");
         address minter = vm.envAddress("BF_MINTER");
         address rewarder = vm.envAddress("BF_REWARDER");
@@ -164,7 +156,6 @@ contract DeployScript is Script {
                 owner: owner,
                 treasury: treasury,
                 exec: exec,
-                fulfiller: fulfiller,
                 riskAdmin: riskAdmin,
                 minter: minter,
                 rewarder: rewarder,

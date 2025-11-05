@@ -11,6 +11,7 @@ import {ReentrancyGuardUpgradeable} from "@openzeppelin/contracts-upgradeable/ut
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {IStrategyManager} from "./StrategyManager.sol";
+import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 
 /**
  * @title Pausable4626Vault
@@ -27,69 +28,26 @@ contract Pausable4626Vault is
 {
     using SafeERC20 for IERC20;
 
-    struct RedemptionRequest {
-        uint256 amount; // amount escrowed in the vault
-        address receiver; // payout receiver
-        address owner; // request owner
-        bool fulfilled; // fulfilled
-        bool claimed; // claimed
-        uint256 assetsLocked;
-    }
-
-    address public deprecatedRedeemNFT_OR_newFeatureAddress;
-
-    address public fulfiller;
     address public riskAdmin;
     IStrategyManager public manager;
-    address public minter;
-    address public rewarder;
 
     // restrictions on users and tvl
     uint256 public tvlCap;
     bool public userWhiteListActive;
     mapping(address => bool) public userWhiteList;
 
-    mapping(uint256 => RedemptionRequest) public requests;
-    uint256 public nextReqId;
-    uint256 public amtRequested;
-
     /* -- Strategy functions --- */
     event ManagerSet(address indexed a);
-    event FulfillerSet(address indexed a);
     event RiskAdminSet(address indexed a);
-    event MinterSet(address indexed a);
-    event RewarderSet(address indexed a);
     event CapitalDeployed(address strat, uint256 amount);
-    event RedeemRequestCreated(uint256 indexed id, address indexed owner, address indexed receiver, uint256 shares);
-    event RedeemRequestClaimed(
-        uint256 indexed id,
-        address indexed owner,
-        address indexed receiver,
-        uint256 shares,
-        uint256 assetsOut
-    );
-    event RedeemRequestFulfilled(
-        uint256 indexed id,
-        address indexed owner,
-        address indexed receiver,
-        address fulfiller,
-        uint256 requested,
-        uint256 assetsLocked
-    );
-    event RedeemRequestCanceled(uint256 indexed id, address indexed owner, uint256 shares);
+    event LiquidityPulled(uint256 request, uint256 got);
     event UserWhiteList(address indexed user, bool isWhiteListed);
     event UserWhiteListActive(bool isActive);
     event TVLCapChanged(uint256 newCap);
-    event RewardsMinted(address indexed to, uint256 amount);
 
     /* ---------- errors ---------- */
     error Disabled();
     error Shortfall(uint256 needed, uint256 got);
-    error NotRequestOwner();
-    error RequestNotFulfilled();
-    error RequestAlreadyClaimed();
-    error RequestAlreadyFulfilled();
-    error RequestDoesNotExist();
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -107,25 +65,13 @@ contract Pausable4626Vault is
         string memory name_,
         string memory symbol_,
         address initialOwner,
-        address manager_,
-        address fulfiller_,
-        address riskAdmin_,
-        address minter_,
-        address rewarder_
+        address manager_
     ) public initializer {
         if (address(asset_) == address(0)) revert(); // asset must be set
         if (initialOwner == address(0)) revert(); // owner must be set
-        if (manager_ != address(0)) {
-            IStrategyManager m = IStrategyManager(manager_);
-            require(m.asset() == asset_, "manager asset mismatch");
-            manager = m;
-        }
 
-        fulfiller = fulfiller_;
-        riskAdmin = riskAdmin_;
-        minter = minter_;
-        rewarder = rewarder_;
-        tvlCap = 32 ether;
+        riskAdmin = initialOwner;
+        tvlCap = type(uint256).max;
         userWhiteListActive = true;
 
         // Initialize parent contracts
@@ -135,33 +81,21 @@ contract Pausable4626Vault is
         __Ownable_init(initialOwner);
         __UUPSUpgradeable_init();
         __ReentrancyGuard_init();
+
+        _setManager(manager_);
     }
 
     /*---- setters ---- */
 
     function setManager(address a) external onlyOwner whenPaused {
+        _setManager(a);
+    }
+
+    function _setManager(address a) internal {
         require(a != address(0), "ZM");
         manager = IStrategyManager(a);
         require(address(manager.asset()) == address(asset()), "A");
         emit ManagerSet(a);
-    }
-
-    function setMinter(address a) external onlyOwner whenPaused {
-        require(a != address(0), "ZA");
-        minter = a;
-        emit MinterSet(a);
-    }
-
-    function setRewarder(address a) external onlyOwner whenPaused {
-        require(a != address(0), "ZA");
-        rewarder = a;
-        emit RewarderSet(a);
-    }
-
-    function setFulfiller(address a) external onlyOwner {
-        require(a != address(0), "ZF");
-        fulfiller = a;
-        emit FulfillerSet(a);
     }
 
     function setRiskAdmin(address a) external onlyOwner {
@@ -169,19 +103,19 @@ contract Pausable4626Vault is
         riskAdmin = a;
         emit RiskAdminSet(a);
     }
-    function setUserWhiteList(address a, bool isWhiteListed) external onlyRiskAdmin {
+    function setUserWhiteList(address a, bool isWhiteListed) external onlyRiskAdminOrGov {
         userWhiteList[a] = isWhiteListed;
         emit UserWhiteList(a, isWhiteListed);
     }
 
-    function setUserWhiteListActive(bool b) external onlyRiskAdmin {
+    function setUserWhiteListActive(bool b) external onlyRiskAdminOrGov {
         userWhiteListActive = b;
         emit UserWhiteListActive(b);
     }
 
-    function setTVLCap(uint256 newCap) external onlyRiskAdmin {
+    function setTVLCap(uint256 newCap) external onlyRiskAdminOrGov {
         tvlCap = newCap;
-        emit TVLCapChanged(newCap);
+        emit TVLCapChanged(tvlCap);
     }
 
     /* -- some getters */
@@ -191,17 +125,7 @@ contract Pausable4626Vault is
 
     /* ---- modifiers --- */
 
-    // Add a modifier
-    modifier onlyMinter() {
-        require(msg.sender == minter || msg.sender == owner(), "OM");
-        _;
-    }
-
-    modifier onlyFulfiller() {
-        require(msg.sender == fulfiller || msg.sender == owner(), "OF");
-        _;
-    }
-    modifier onlyRiskAdmin() {
+    modifier onlyRiskAdminOrGov() {
         require(msg.sender == riskAdmin || msg.sender == owner(), "ORA");
         _;
     }
@@ -241,153 +165,21 @@ contract Pausable4626Vault is
         _deposit(msg.sender, receiver, assets, shares);
     }
 
-    /**
-     * @notice Request redemption of shares for underlying assets
-     * @param amount Number of shares to redeem
-     * @param receiver Address that will receive the redeemed assets (use address(0) for msg.sender)
-     * @return id The unique identifier for this redemption request
-     * @dev Shares are transferred to vault escrow. Must be fulfilled by fulfiller before claiming.
-     */
-    function requestRedeem(
-        uint256 amount,
-        address receiver
-    ) external whenNotPaused nonReentrant onlyWhiteListed returns (uint256 id) {
-        uint256 maxAmount = maxRedeem(msg.sender);
-        if (amount > maxAmount) {
-            revert ERC4626ExceededMaxRedeem(msg.sender, amount, maxAmount);
-        }
-        return _requestRedeem(msg.sender, receiver, amount);
+    function withdraw(
+        uint256 assets,
+        address receiver,
+        address owner_
+    ) public override whenNotPaused nonReentrant returns (uint256 shares) {
+        (shares, ) = _exit(assets, 0, receiver, owner_);
     }
 
-    /**
-     * @notice Fulfill a pending redemption request by locking assets
-     * @param id The redemption request identifier
-     * @dev Only callable by fulfiller. Locks assets at current 1:1 exchange rate.
-     *      Pulls liquidity from manager if vault balance insufficient.
-     */
-    function fulfillRequest(uint256 id) external nonReentrant whenNotPaused onlyFulfiller {
-        RedemptionRequest storage r = requests[id];
-        if (r.owner == address(0)) revert RequestDoesNotExist();
-        if (r.fulfilled) revert RequestAlreadyFulfilled();
-        if (r.claimed) revert RequestAlreadyClaimed();
-
-        // ensure liquidity: pull from manager if needed
-        uint256 bal = IERC20(asset()).balanceOf(address(this));
-        r.assetsLocked = previewRedeem(r.amount);
-        amtRequested += r.assetsLocked;
-        if (bal < amtRequested) _pullFromManager(amtRequested - bal); // must make funds available or revert
-        r.fulfilled = true;
-        emit RedeemRequestFulfilled(id, r.owner, r.receiver, msg.sender, r.amount, r.assetsLocked);
+    function redeem(
+        uint256 shares,
+        address receiver,
+        address owner_
+    ) public override whenNotPaused nonReentrant returns (uint256 assets) {
+        (, assets) = _exit(0, shares, receiver, owner_);
     }
-    /**
-     * @notice Claim assets from a fulfilled redemption request
-     * @param id The redemption request identifier
-     * @dev Burns escrowed shares and transfers locked assets to receiver.
-     *      Only callable by request owner after fulfillment.
-     */
-    function claimRedemption(uint256 id) external nonReentrant whenNotPaused {
-        RedemptionRequest storage r = requests[id];
-        if (r.owner != msg.sender) revert NotRequestOwner();
-        if (!r.fulfilled) revert RequestNotFulfilled();
-        if (r.claimed) revert RequestAlreadyClaimed();
-        r.claimed = true;
-        delete requests[id];
-        _burn(address(this), r.amount);
-        IERC20(asset()).safeTransfer(r.receiver, r.assetsLocked);
-        amtRequested -= r.assetsLocked;
-        emit RedeemRequestClaimed(id, r.owner, r.receiver, r.amount, r.assetsLocked);
-    }
-
-    /**
-     * @notice Cancel an unfulfilled redemption request
-     * @param id The redemption request identifier
-     * @dev Returns escrowed shares to owner. Can only cancel before fulfillment.
-     */
-    function cancelRequest(uint256 id) external nonReentrant whenNotPaused {
-        RedemptionRequest storage r = requests[id];
-        if (r.owner != msg.sender) revert NotRequestOwner();
-        if (r.fulfilled) revert RequestAlreadyFulfilled();
-        if (r.claimed) revert RequestAlreadyClaimed();
-
-        uint256 shares = r.amount;
-        delete requests[id];
-
-        // Return shares to user
-        _transfer(address(this), msg.sender, shares);
-        emit RedeemRequestCanceled(id, msg.sender, shares);
-    }
-
-    /* view and pure functions */
-
-    function getRequestStatus(
-        uint256 id
-    ) external view returns (bool exists, bool fulfilled, bool claimed, uint256 shares, uint256 assets) {
-        RedemptionRequest storage r = requests[id];
-        exists = r.owner != address(0);
-        fulfilled = r.fulfilled;
-        claimed = r.claimed;
-        shares = r.amount;
-        assets = r.assetsLocked;
-    }
-    // 1:1 conversions
-    function convertToShares(uint256 assets) public view override returns (uint256) {
-        return assets;
-    }
-    function convertToAssets(uint256 shares) public view override returns (uint256) {
-        return shares;
-    }
-
-    // Make previews explicit 1:1 (not strictly required, but clearer)
-    function previewDeposit(uint256 assets) public view override returns (uint256) {
-        return assets;
-    }
-    function previewMint(uint256 shares) public view override returns (uint256) {
-        return shares;
-    }
-    function previewWithdraw(uint256 assets) public view override returns (uint256) {
-        return assets;
-    }
-    function previewRedeem(uint256 shares) public view override returns (uint256) {
-        return shares;
-    }
-
-    // CPPS accounting: principal only. If you externalize yield, keep this equal to principal.
-    function totalAssets() public view override returns (uint256) {
-        // simplest CPPS invariant: principal == totalSupply()
-        return totalSupply();
-    }
-
-    // disable direct exits
-    function maxWithdraw(address) public pure override returns (uint256) {
-        return 0;
-    }
-    function maxRedeem(address user) public view override returns (uint256) {
-        return balanceOf(user);
-    }
-    // Disable share-centric entry
-    function maxMint(address) public pure override returns (uint256) {
-        return 0;
-    }
-
-    function maxDeposit(address account) public view override returns (uint256) {
-        if (paused()) return 0;
-        if (userWhiteListActive && !userWhiteList[account]) return 0;
-        if (tvlCap < totalSupply()) return 0;
-        if (tvlCap < type(uint256).max) return tvlCap - totalSupply();
-        return type(uint256).max;
-    }
-
-    function mint(uint256, address) public pure override returns (uint256) {
-        revert Disabled();
-    }
-
-    function withdraw(uint256, address, address) public pure override returns (uint256) {
-        revert Disabled();
-    }
-    function redeem(uint256, address, address) public pure override returns (uint256) {
-        revert Disabled();
-    }
-
     /* internals */
     function _deposit(address caller, address receiver, uint256 assets, uint256 shares) internal virtual override {
         // If asset() is ERC-777, `transferFrom` can trigger a reentrancy BEFORE the transfer happens through the
@@ -411,36 +203,108 @@ contract Pausable4626Vault is
 
     function _pullFromManager(uint256 needed) internal {
         if (needed == 0) return;
+        require(address(manager) != address(0), "manager not set");
         uint256 b0 = IERC20(asset()).balanceOf(address(this));
         manager.withdrawToVault(needed);
         uint256 got = IERC20(asset()).balanceOf(address(this)) - b0;
         if (got < needed) revert Shortfall(needed, got);
+        emit LiquidityPulled(needed, got);
     }
 
-    function _requestRedeem(address owner, address receiver, uint256 amount) internal returns (uint256 id) {
-        // 1) escrow in the vault
-        _spendAllowance(owner, address(this), amount);
-        _transfer(owner, address(this), amount);
-
-        // 2) record request
-        id = ++nextReqId;
-        requests[id] = RedemptionRequest({
-            amount: amount,
-            receiver: receiver == address(0) ? owner : receiver,
-            owner: owner,
-            fulfilled: false,
-            claimed: false,
-            assetsLocked: 0
-        });
-
-        emit RedeemRequestCreated(id, owner, receiver, amount);
+    function _availableLiquidity() internal view returns (uint256) {
+        uint256 bal = IERC20(asset()).balanceOf(address(this));
+        if (address(manager) == address(0)) return bal;
+        uint256 m = manager.maxWithdrawable();
+        // Defensive: avoid accidental overflow (not realistically hit with ERC20)
+        unchecked {
+            return bal + m;
+        }
     }
 
+    function _exit(
+        uint256 assets, // set if withdraw path; may be 0 on redeem path
+        uint256 shares, // set if redeem path; may be 0 on withdraw path
+        address receiver,
+        address owner_
+    ) internal returns (uint256 sharesBurned, uint256 assetsOut) {
+        // 0-amount operations: make them a no-op (many integrators probe with 0)
+        if (assets == 0 && shares == 0) {
+            return (0, 0);
+        }
 
-    function mintRewards(uint256 shares) external onlyMinter whenNotPaused nonReentrant {
-        _mint(rewarder, shares);
-        emit RewardsMinted(rewarder, shares);
+        if (assets == 0 && shares != 0) {
+            // redeem path
+            assets = previewRedeem(shares);
+            uint256 maxS = maxRedeem(owner_);
+            if (shares > maxS) revert ERC4626ExceededMaxRedeem(owner_, shares, maxS);
+        } else if (shares == 0 && assets != 0) {
+            // withdraw path
+            shares = previewWithdraw(assets);
+            uint256 maxA = maxWithdraw(owner_);
+            if (assets > maxA) revert ERC4626ExceededMaxWithdraw(owner_, assets, maxA);
+        } else {
+            // both provided (shouldn't happen via your externals, but defend anyway)
+            // ensure consistency under current exchange rate
+            uint256 expectedAssets = previewRedeem(shares);
+            require(expectedAssets == assets, "exit: assets/shares mismatch");
+            uint256 maxA2 = maxWithdraw(owner_);
+            if (assets > maxA2) revert ERC4626ExceededMaxWithdraw(owner_, assets, maxA2);
+        }
+
+        // Ensure liquidity before internal withdraw
+        uint256 bal = IERC20(asset()).balanceOf(address(this));
+        if (bal < assets) _pullFromManager(assets - bal);
+
+        // Single standard path
+        _withdraw(_msgSender(), receiver, owner_, assets, shares);
+        return (shares, assets);
     }
+
+    // CPPS accounting: principal only. If you externalize yield, keep this equal to principal.
+    function totalAssets() public view override returns (uint256) {
+        // simplest CPPS invariant: principal == totalSupply()
+        return totalSupply();
+    }
+
+    function maxWithdraw(address owner_) public view override returns (uint256) {
+        if (paused()) return 0;
+        // User can’t withdraw more than their balance (1:1 shares/assets)
+        uint256 userBal = convertToAssets(balanceOf(owner_)); // == balanceOf(owner_)
+        uint256 liq = _availableLiquidity();
+        // Min(user balance, available liquidity)
+        return userBal < liq ? userBal : liq;
+    }
+
+    function maxRedeem(address owner_) public view override returns (uint256) {
+        if (paused()) return 0;
+        uint256 userShares = balanceOf(owner_); // 1:1, so this equals assets
+        uint256 liq = _availableLiquidity();
+        // Since shares==assets, the same min applies
+        return userShares < liq ? userShares : liq;
+    }
+
+    // Disable share-centric entry
+    function maxMint(address) public pure override returns (uint256) {
+        return 0;
+    }
+
+    function maxDeposit(address account) public view override returns (uint256) {
+        if (paused()) return 0;
+        if (userWhiteListActive && !userWhiteList[account]) return 0;
+        if (tvlCap < totalSupply()) return 0;
+        if (tvlCap < type(uint256).max) return tvlCap - totalSupply();
+        return type(uint256).max;
+    }
+
+    function mint(uint256, address) public pure override returns (uint256) {
+        revert Disabled();
+    }
+
+    // Match share decimals to the underlying asset
+    function decimals() public view override(ERC4626Upgradeable) returns (uint8) {
+        return IERC20Metadata(address(asset())).decimals();
+    }
+
 
     function _authorizeUpgrade(address newImplementation) internal override onlyOwner {}
 
