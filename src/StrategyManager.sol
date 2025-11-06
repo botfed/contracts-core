@@ -24,7 +24,7 @@ contract StrategyManager is Initializable, UUPSUpgradeable, OwnableUpgradeable, 
     uint256 public constant MAX_STRATEGIES = 64;
     IERC20 public asset;
     address public vault;
-    address public deprecated_address; // kept to preserve storage layout from prior version (formerly 'treasury')
+    address public deprecated_treasury; // kept to preserve storage layout from prior version (formerly 'treasury')
     address public exec;
 
     mapping(address => bool) public isStrategy;

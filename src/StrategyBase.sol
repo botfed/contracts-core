@@ -36,6 +36,7 @@ abstract contract StrategyBaseUpgradeable is
 
     error ZeroAddress();
     error NotAuth();
+    error InvalidSet();
 
     /* -------------------- init / upgrade -------------------- */
     /// @custom:oz-upgrades-unsafe-allow constructor
@@ -57,6 +58,7 @@ abstract contract StrategyBaseUpgradeable is
             executor_ == address(0) ||
             address(asset_) == address(0)
         ) revert ZeroAddress();
+        if (executor_ == riskAdmin_) revert InvalidSet();
 
         manager = manager_;
         executor = executor_;
@@ -92,6 +94,7 @@ abstract contract StrategyBaseUpgradeable is
 
     function setExecutor(address a) external onlyExecutorOrGov {
         if (a == address(0)) revert ZeroAddress();
+        if (a == riskAdmin) revert InvalidSet();
         address old = executor;
         executor = a;
         emit ExecutorSet(old, a);
@@ -99,6 +102,7 @@ abstract contract StrategyBaseUpgradeable is
 
     function setRiskAdmin(address a) external onlyRiskAdminOrGov {
         if (a == address(0)) revert ZeroAddress();
+        if (a == executor) revert InvalidSet();
         address old = riskAdmin;
         riskAdmin = a;
         emit RiskAdminSet(old, a);
