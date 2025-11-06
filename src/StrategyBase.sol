@@ -25,15 +25,17 @@ abstract contract StrategyBaseUpgradeable is
     using SafeERC20 for IERC20;
 
     IERC20 public asset; // e.g., WETH
-    address public manager; // StrategyVaultManager
+    address public manager; // StrategyManager
     address public executor; // keeper/bot
     address public riskAdmin; // keeper/bot
 
-    event ManagerSet(address indexed manager);
-    event RiskAdminSet(address indexed riskAdmin);
-    event ExecutorSet(address indexed executor);
+    event ManagerSet(address indexed oldManager, address indexed newManager);
+    event RiskAdminSet(address indexed oldRiskAdmin, address indexed newRiskAdmin);
+    event ExecutorSet(address indexed oldExec, address indexed newExec);
     event Withdrawn(address indexed to, uint256 amount);
-    event EmergencyWithdraw(address indexed token, uint256 amount);
+
+    error ZeroAddress();
+    error NotAuth();
 
     /* -------------------- init / upgrade -------------------- */
     /// @custom:oz-upgrades-unsafe-allow constructor
@@ -48,11 +50,13 @@ abstract contract StrategyBaseUpgradeable is
         address executor_,
         IERC20 asset_
     ) public virtual initializer {
-        require(owner_ != address(0), "owner=0");
-        require(manager_ != address(0), "manager=0");
-        require(riskAdmin_ != address(0), "riskAdmin=0");
-        require(executor_ != address(0), "executor=0");
-        require(address(asset_) != address(0), "asset=0");
+        if (
+            owner_ == address(0) ||
+            manager_ == address(0) ||
+            riskAdmin_ == address(0) ||
+            executor_ == address(0) ||
+            address(asset_) == address(0)
+        ) revert ZeroAddress();
 
         manager = manager_;
         executor = executor_;
@@ -63,67 +67,58 @@ abstract contract StrategyBaseUpgradeable is
         __UUPSUpgradeable_init();
         __ReentrancyGuard_init();
 
-        emit RiskAdminSet(riskAdmin);
-        emit ManagerSet(manager_);
-        emit ExecutorSet(executor_);
+        emit RiskAdminSet(address(0), riskAdmin);
+        emit ManagerSet(address(0), manager);
+        emit ExecutorSet(address(0), executor);
     }
 
     function _authorizeUpgrade(address) internal override onlyOwner {}
 
     /* -------------------- admin setters --------------------- */
     modifier onlyExecutorOrGov() {
-        require(msg.sender == executor || msg.sender == owner(), "not auth");
+        if (msg.sender != executor && msg.sender != owner()) revert NotAuth();
         _;
     }
 
     modifier onlyManagerOrGov() {
-        require(msg.sender == manager || msg.sender == owner(), "not auth");
+        if (msg.sender != manager && msg.sender != owner()) revert NotAuth();
         _;
     }
 
     modifier onlyRiskAdminOrGov() {
-        require(msg.sender == riskAdmin || msg.sender == owner(), "not auth");
+        if (msg.sender != riskAdmin && msg.sender != owner()) revert NotAuth();
         _;
     }
 
     function setExecutor(address a) external onlyExecutorOrGov {
-        require(a != address(0), "executor=0");
+        if (a == address(0)) revert ZeroAddress();
+        address old = executor;
         executor = a;
-        emit ExecutorSet(a);
+        emit ExecutorSet(old, a);
     }
 
     function setRiskAdmin(address a) external onlyRiskAdminOrGov {
-        require(a != address(0), "riskAdmin=0");
+        if (a == address(0)) revert ZeroAddress();
+        address old = riskAdmin;
         riskAdmin = a;
-        emit RiskAdminSet(a);
+        emit RiskAdminSet(old, a);
     }
 
     function setManager(address a) external onlyOwner {
-        require(a != address(0), "manager=0");
+        if (a == address(0)) revert ZeroAddress();
+        address old = manager;
         manager = a;
-        emit ManagerSet(a);
+        emit ManagerSet(old, a);
     }
 
-    /* -------------------- manager withdrawals -------------------- */
-    /// @notice Manager pulls `assets` of the strategy's asset to `recipient`.
+    /// @notice Transfers up to `assets` of the strategy asset to the manager.
+    /// @return withdrawn The amount actually transferred (<= requested and <= balance).
+    /// @dev Manager-initiated pull; strategy never pushes proactively.
     function withdrawToManager(uint256 assets) external onlyManagerOrGov nonReentrant returns (uint256 withdrawn) {
         uint256 bal = asset.balanceOf(address(this));
         withdrawn = assets > bal ? bal : assets;
         if (withdrawn > 0) asset.safeTransfer(manager, withdrawn);
         emit Withdrawn(manager, withdrawn);
-    }
-
-    // manual escape hatch to manager that can be called by exectuor
-
-    function forceSweepToManager(address token, uint256 amount) external onlyExecutorOrGov nonReentrant {
-        if (token == address(0)) {
-            (bool ok, ) = payable(manager).call{value: amount}("");
-            require(ok, "ETH xfer fail");
-            emit EmergencyWithdraw(address(0), amount);
-        } else {
-            IERC20(token).safeTransfer(manager, amount);
-            emit EmergencyWithdraw(token, amount);
-        }
     }
 
     receive() external payable {}
