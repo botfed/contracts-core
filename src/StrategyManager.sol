@@ -21,59 +21,56 @@ interface IStrategyManager {
 contract StrategyManager is Initializable, UUPSUpgradeable, OwnableUpgradeable, ReentrancyGuardUpgradeable {
     using SafeERC20 for IERC20;
 
-    /* ------------------------- Config ------------------------- */
-    uint256 public constant MAX_STRATEGIES = 64; // pick a sane cap
-    IERC20 public asset; // e.g., WETH
-    address public vault; // the only address allowed to request funds out (user exits)
-    address public treasury; // DAO treasury for fees / emergencies
-    address public exec; // Exec agent for moving money around in gated way
+    uint256 public constant MAX_STRATEGIES = 64;
+    IERC20 public asset;
+    address public vault;
+    address public deprecated_address; // kept to preserve storage layout from prior version (formerly 'treasury')
+    address public exec;
 
-    /* ---------------------- Strategy Set ---------------------- */
     mapping(address => bool) public isStrategy;
-    address[] public strategies; // may contain disabled entries; check isStrategy[strat]
+    address[] public strategies;
     mapping(address => uint256) public strategyDeployed;
     mapping(address => uint256) public strategyWithdrawn;
 
-    /* ------------------------- Events ------------------------- */
     event StrategyAdded(address indexed strat);
     event StrategyRemoved(address indexed strat);
     event CapitalPushed(address indexed strat, uint256 amount);
     event CapitalPulled(address indexed strat, uint256 requested, uint256 received);
     event WithdrawnTo(address indexed to, uint256 amount);
-    event SetVault(address indexed who);
-    event SetTreasury(address indexed who);
-    event SetExec(address indexed who);
-    event EmergencyWithdraw(address indexed token, uint256 amount);
+    event SetVault(address indexed oldVault, address indexed newVault);
+    event SetExec(address indexed oldExec, address indexed newExec);
 
-    /* ------------------------- Errors ------------------------- */
     error UnknownStrategy();
     error InconsistentReturn();
-    error Shortfall(uint256 requested, uint256 available);
     error ZeroAmount();
     error InsufficientAssets(uint256 requested, uint256 available);
+    error OnlyVault();
+    error OnlyExecOrOwner();
+    error ZeroAddress();
+    error MaxStrategies();
+    error StrategyAlreadyExists();
+    error StrategyDoesNotExist();
+    error StrategyInvalidOwner();
+    error StrategyInvalidAsset();
 
-    modifier onlyExec() {
-        require(msg.sender == exec || msg.sender == owner(), "OE");
+    modifier onlyExecOrOwner() {
+        if (msg.sender != exec && msg.sender != owner()) revert OnlyExecOrOwner();
         _;
     }
 
     modifier onlyVault() {
-        require(msg.sender == vault || msg.sender == owner(), "OE");
+        if (msg.sender != vault) revert OnlyVault();
         _;
     }
 
-    /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
         _disableInitializers();
     }
 
-    function initialize(IERC20 asset_, address owner_, address treasury_, address exec_) public initializer {
-        require(address(asset_) != address(0), "asset=0");
-        require(owner_ != address(0), "owner=0");
-        require(treasury_ != address(0), "treasury=0");
+    function initialize(IERC20 asset_, address owner_, address exec_) public initializer {
+        if (address(asset_) == address(0) || owner_ == address(0)) revert ZeroAddress();
 
         asset = asset_;
-        treasury = treasury_;
         exec = exec_;
 
         __Ownable_init(owner_);
@@ -81,42 +78,30 @@ contract StrategyManager is Initializable, UUPSUpgradeable, OwnableUpgradeable, 
         __ReentrancyGuard_init();
     }
 
-    /* ------------------------ Admin set ------------------------ */
+    /* ------------------------ Admin functions ------------------------ */
 
     function setVault(address a) external onlyOwner {
-        require(a != address(0), "withdraw=0");
+        if (a == address(0)) revert ZeroAddress();
+        address oldVault = vault;
         vault = a;
-        emit SetVault(a);
-    }
-
-    function setTreasury(address a) external onlyOwner {
-        require(a != address(0), "treasury=0");
-        treasury = a;
-        emit SetTreasury(a);
+        emit SetVault(oldVault, a);
     }
 
     function setExec(address a) external onlyOwner {
-        require(a != address(0), "exec=0");
+        if (a == address(0)) revert ZeroAddress();
+        address old = exec;
         exec = a;
-        emit SetExec(a);
+        emit SetExec(old, a);
     }
 
-    /* -------------------- Strategy management -------------------- */
-
+    /// @notice Registers a new strategy. Must share same asset and owner.
+    ///         Does not verify implementation beyond basic interface.
     function addStrategy(address strat) external onlyOwner {
-        require(strat != address(0), "strat=0");
-        require(!isStrategy[strat], "exists");
-        require(strategies.length < MAX_STRATEGIES, "max strategies");
-
-        // Optional: Validate interface
-        try IStrategy(strat).withdrawToManager(0) returns (uint256) {
-            // Interface check passed
-        } catch {
-            revert("Invalid strategy interface");
-        }
-
-        require(OwnableUpgradeable(strat).owner() == owner(), "strat invalid owner");
-        require(IStrategy(strat).asset() == asset, "strat invalid asset");
+        if (strat == address(0)) revert ZeroAddress();
+        if (isStrategy[strat]) revert StrategyAlreadyExists();
+        if (strategies.length >= MAX_STRATEGIES) revert MaxStrategies();
+        if (OwnableUpgradeable(strat).owner() != owner()) revert StrategyInvalidOwner();
+        if (IStrategy(strat).asset() != asset) revert StrategyInvalidAsset();
 
         isStrategy[strat] = true;
         strategies.push(strat);
@@ -124,7 +109,7 @@ contract StrategyManager is Initializable, UUPSUpgradeable, OwnableUpgradeable, 
     }
 
     function removeStrategy(address strat) external onlyOwner {
-        require(isStrategy[strat], "missing");
+        if (!isStrategy[strat]) revert StrategyDoesNotExist();
 
         // Find the strategy in the array
         for (uint256 i = 0; i < strategies.length; i++) {
@@ -140,14 +125,9 @@ contract StrategyManager is Initializable, UUPSUpgradeable, OwnableUpgradeable, 
         emit StrategyRemoved(strat);
     }
 
-    function strategiesLength() external view returns (uint256) {
-        return strategies.length;
-    }
-
     /* ---------------------- Capital movement --------------------- */
 
-    /// @notice Push `amount` of `asset` to a strategy.
-    function pushToStrategy(address strat, uint256 amount) external nonReentrant onlyExec {
+    function pushToStrategy(address strat, uint256 amount) external nonReentrant onlyExecOrOwner {
         if (!isStrategy[strat]) revert UnknownStrategy();
         if (amount == 0) revert ZeroAmount();
         asset.safeTransfer(strat, amount);
@@ -155,11 +135,11 @@ contract StrategyManager is Initializable, UUPSUpgradeable, OwnableUpgradeable, 
         emit CapitalPushed(strat, amount);
     }
 
-    /// @notice Pull `amount` of `asset` back from a specific strategy to this manager.
+    /// @dev Removed strategies cannot be pulled. Re-add the strategy to reclaim funds.
     function pullFromStrategy(
         address strat,
         uint256 requested
-    ) public nonReentrant onlyExec returns (uint256 received) {
+    ) public nonReentrant onlyExecOrOwner returns (uint256 received) {
         if (!isStrategy[strat]) revert UnknownStrategy();
         uint256 balanceBefore = asset.balanceOf(address(this));
         received = IStrategy(strat).withdrawToManager(requested);
@@ -169,38 +149,23 @@ contract StrategyManager is Initializable, UUPSUpgradeable, OwnableUpgradeable, 
         emit CapitalPulled(strat, requested, actualReceived);
     }
 
-    /// @notice Satisfy a withdrawal request by sending `amount` to `to`,
-    ///         pulling from strategies as needed. Callable by Withdraw Vault.
+    /// @notice Sends `amount` of idle `asset` to the vault.
+    ///         Does NOT currently pull from strategies. Off-chain orchestration should pre-fund this.
     function withdrawToVault(uint256 amount) external onlyVault nonReentrant {
         if (amount == 0) revert ZeroAmount();
-        uint256 b0 = asset.balanceOf(address(this));
+        uint256 b0 = maxWithdrawable();
         if (b0 < amount) revert InsufficientAssets(amount, b0);
         asset.safeTransfer(vault, amount);
         emit WithdrawnTo(vault, amount);
     }
 
-    function maxWithdrawable() external view returns (uint256) {
+    /* Views */
+
+    /// @notice Returns max amount withdrawable by vault. Currently just returns idle balance as we are not pulling from strats atomically.
+    function maxWithdrawable() public view returns (uint256) {
         return asset.balanceOf(address(this));
     }
 
-    /* --------------------------- Admin ops -------------------------- */
-
-    /* -------------------- emergencies (owner/executor) -------------------- */
-    function forceSweepToTreasury(address token, uint256 amount) external onlyExec nonReentrant {
-        if (token == address(0)) {
-            (bool ok, ) = payable(treasury).call{value: amount}("");
-            require(ok, "ETH xfer fail");
-            emit EmergencyWithdraw(address(0), amount);
-        } else {
-            IERC20(token).safeTransfer(treasury, amount);
-            emit EmergencyWithdraw(token, amount);
-        }
-    }
-
-    /* --- Other convencience views --- */
-    function strategyNetDeployed(address strat) external view returns (int256) {
-        return int256(strategyDeployed[strat]) - int256(strategyWithdrawn[strat]);
-    }
     function getStrategyDeployed(address strat) external view returns (uint256) {
         return strategyDeployed[strat];
     }
@@ -208,40 +173,9 @@ contract StrategyManager is Initializable, UUPSUpgradeable, OwnableUpgradeable, 
         return strategyWithdrawn[strat];
     }
 
-    function getActiveStrategies() external view returns (address[] memory) {
-        address[] memory active = new address[](strategies.length);
-        uint256 count = 0;
-
-        for (uint256 i = 0; i < strategies.length; i++) {
-            if (isStrategy[strategies[i]]) {
-                active[count] = strategies[i];
-                count++;
-            }
-        }
-
-        // Resize array to actual count
-        assembly {
-            mstore(active, count)
-        }
-        return active;
+    function strategiesLength() external view returns (uint256) {
+        return strategies.length;
     }
-
-    function getTotalDeployed() external view returns (uint256 total) {
-        for (uint256 i = 0; i < strategies.length; i++) {
-            if (isStrategy[strategies[i]]) {
-                total += strategyDeployed[strategies[i]];
-            }
-        }
-    }
-
-    function getTotalWithdrawn() external view returns (uint256 total) {
-        for (uint256 i = 0; i < strategies.length; i++) {
-            if (isStrategy[strategies[i]]) {
-                total += strategyWithdrawn[strategies[i]];
-            }
-        }
-    }
-
     /* ---------------------- UUPS authorization --------------------- */
     function _authorizeUpgrade(address newImpl) internal override onlyOwner {}
 

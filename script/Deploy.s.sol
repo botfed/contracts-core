@@ -67,7 +67,7 @@ contract DeployScript is Script {
         console.log("Deploying StrategyManager proxy...");
         bytes memory strategyManagerInitData = abi.encodeCall(
             StrategyManager.initialize,
-            (IERC20(config.asset), deployer, config.treasury, config.exec)
+            (IERC20(config.asset), deployer, config.exec)
         );
 
         ERC1967Proxy strategyManagerProxy = new ERC1967Proxy(address(strategyManagerImpl), strategyManagerInitData);
@@ -117,7 +117,6 @@ contract DeployScript is Script {
         console.log("StrategyManager asset:", address(sm.asset()));
         console.log("StrategyManager owner:", sm.owner());
         console.log("StrategyManager vault:", sm.vault());
-        console.log("StrategyManager treasury:", sm.treasury());
         console.log("StrategyManager exec:", sm.exec());
 
         console.log("Vault name:", vault.name());
