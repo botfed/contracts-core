@@ -171,13 +171,6 @@ contract StrategyManager is Initializable, UUPSUpgradeable, OwnableUpgradeable, 
         return asset.balanceOf(address(this));
     }
 
-    function getStrategyDeployed(address strat) external view returns (uint256) {
-        return strategyDeployed[strat];
-    }
-    function getStrategyWithdrawn(address strat) external view returns (uint256) {
-        return strategyWithdrawn[strat];
-    }
-
     function strategiesLength() external view returns (uint256) {
         return strategies.length;
     }
