@@ -324,7 +324,7 @@ contract StrategyManagerTest is Test {
         uint256 amount = 1000e18;
         uint256 initialManagerBal = asset.balanceOf(address(strategyManager));
         uint256 initialStratBal = asset.balanceOf(address(mockStrategy1));
-        uint256 initialDeployed = strategyManager.getStrategyDeployed(address(mockStrategy1));
+        uint256 initialDeployed = strategyManager.strategyDeployed(address(mockStrategy1));
 
         vm.expectEmit(true, true, true, true);
         emit CapitalPushed(address(mockStrategy1), amount);
@@ -334,7 +334,7 @@ contract StrategyManagerTest is Test {
 
         assertEq(asset.balanceOf(address(strategyManager)), initialManagerBal - amount);
         assertEq(asset.balanceOf(address(mockStrategy1)), initialStratBal + amount);
-        assertEq(strategyManager.getStrategyDeployed(address(mockStrategy1)), initialDeployed + amount);
+        assertEq(strategyManager.strategyDeployed(address(mockStrategy1)), initialDeployed + amount);
     }
 
     function test_PushToStrategy_UnknownStrategy() public {
@@ -361,7 +361,7 @@ contract StrategyManagerTest is Test {
         uint256 requested = 500e18;
         uint256 initialManagerBal = asset.balanceOf(address(strategyManager));
         uint256 initialStratBal = asset.balanceOf(address(mockStrategy1));
-        uint256 initialWithdrawn = strategyManager.getStrategyWithdrawn(address(mockStrategy1));
+        uint256 initialWithdrawn = strategyManager.strategyWithdrawn(address(mockStrategy1));
 
         vm.expectEmit(true, true, true, true);
         emit CapitalPulled(address(mockStrategy1), requested, requested);
@@ -372,7 +372,7 @@ contract StrategyManagerTest is Test {
         assertEq(received, requested);
         assertEq(asset.balanceOf(address(strategyManager)), initialManagerBal + requested);
         assertEq(asset.balanceOf(address(mockStrategy1)), initialStratBal - requested);
-        assertEq(strategyManager.getStrategyWithdrawn(address(mockStrategy1)), initialWithdrawn + requested);
+        assertEq(strategyManager.strategyWithdrawn(address(mockStrategy1)), initialWithdrawn + requested);
     }
 
     function test_PullFromStrategy_PartialWithdrawal() public {
@@ -385,7 +385,7 @@ contract StrategyManagerTest is Test {
         mockStrategy1.setWithdrawResult(actualReceived);
 
         uint256 initialManagerBal = asset.balanceOf(address(strategyManager));
-        uint256 initialWithdrawn = strategyManager.getStrategyWithdrawn(address(mockStrategy1));
+        uint256 initialWithdrawn = strategyManager.strategyWithdrawn(address(mockStrategy1));
 
         vm.expectEmit(true, true, true, true);
         emit CapitalPulled(address(mockStrategy1), requested, actualReceived);
@@ -395,7 +395,7 @@ contract StrategyManagerTest is Test {
 
         assertEq(recv, actualReceived);
         assertEq(asset.balanceOf(address(strategyManager)), initialManagerBal + actualReceived);
-        assertEq(strategyManager.getStrategyWithdrawn(address(mockStrategy1)), initialWithdrawn + actualReceived);
+        assertEq(strategyManager.strategyWithdrawn(address(mockStrategy1)), initialWithdrawn + actualReceived);
     }
 
     function test_PullFromStrategy_InconsistentReturn() public {
