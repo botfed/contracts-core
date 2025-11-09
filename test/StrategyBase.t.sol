@@ -32,11 +32,11 @@ contract StrategyBaseUpgradeableTest is Test {
     StrategyBaseUpgradeable public strategy; // proxy as StrategyBaseUpgradeable
     ERC20Mock public asset;
 
-    address public owner      = makeAddr("owner");
-    address public manager    = makeAddr("manager");
-    address public executor   = makeAddr("executor");
-    address public riskAdmin  = makeAddr("riskAdmin");
-    address public rando      = makeAddr("rando");
+    address public owner = makeAddr("owner");
+    address public manager = makeAddr("manager");
+    address public executor = makeAddr("executor");
+    address public riskAdmin = makeAddr("riskAdmin");
+    address public rando = makeAddr("rando");
 
     event ManagerSet(address indexed oldManager, address indexed newManager);
     event RiskAdminSet(address indexed oldRiskAdmin, address indexed newRiskAdmin);
@@ -181,46 +181,41 @@ contract StrategyBaseUpgradeableTest is Test {
         assertEq(strategy.manager(), newManager);
     }
 
-    function test_OnlyExecutorOrGov_setExecutor() public {
+    function test_OnlyOwner_setExecutor() public {
         address newExec = makeAddr("newExec");
-
         vm.prank(rando);
-        vm.expectRevert(abi.encodeWithSelector(StrategyBaseUpgradeable.NotAuth.selector));
+        vm.expectRevert(abi.encodeWithSelector(OwnableUpgradeable.OwnableUnauthorizedAccount.selector, rando));
         strategy.setExecutor(newExec);
 
         vm.prank(executor);
+        vm.expectRevert(abi.encodeWithSelector(OwnableUpgradeable.OwnableUnauthorizedAccount.selector, executor));
+        strategy.setExecutor(newExec);
+
+        // Owner can rotate too
+        vm.prank(owner);
         vm.expectEmit(true, true, false, true);
         emit ExecutorSet(executor, newExec);
         strategy.setExecutor(newExec);
         assertEq(strategy.executor(), newExec);
-
-        // Owner can rotate too
-        vm.prank(owner);
-        vm.expectEmit(true, true, false, true);
-        emit ExecutorSet(newExec, executor);
-        strategy.setExecutor(executor);
-        assertEq(strategy.executor(), executor);
     }
 
-    function test_OnlyRiskAdminOrGov_setRiskAdmin() public {
+    function test_OnlyOwner_setRiskAdmin() public {
         address newRisk = makeAddr("newRisk");
 
         vm.prank(rando);
-        vm.expectRevert(abi.encodeWithSelector(StrategyBaseUpgradeable.NotAuth.selector));
+        vm.expectRevert(abi.encodeWithSelector(OwnableUpgradeable.OwnableUnauthorizedAccount.selector, rando));
         strategy.setRiskAdmin(newRisk);
 
         vm.prank(riskAdmin);
+        vm.expectRevert(abi.encodeWithSelector(OwnableUpgradeable.OwnableUnauthorizedAccount.selector, riskAdmin));
+        strategy.setRiskAdmin(newRisk);
+
+        // Owner can rotate too
+        vm.prank(owner);
         vm.expectEmit(true, true, false, true);
         emit RiskAdminSet(riskAdmin, newRisk);
         strategy.setRiskAdmin(newRisk);
         assertEq(strategy.riskAdmin(), newRisk);
-
-        // Owner can rotate too
-        vm.prank(owner);
-        vm.expectEmit(true, true, false, true);
-        emit RiskAdminSet(newRisk, riskAdmin);
-        strategy.setRiskAdmin(riskAdmin);
-        assertEq(strategy.riskAdmin(), riskAdmin);
     }
 
     function test_Setters_ZeroAddress_Reverts() public {
@@ -228,11 +223,11 @@ contract StrategyBaseUpgradeableTest is Test {
         vm.expectRevert(abi.encodeWithSelector(StrategyBaseUpgradeable.ZeroAddress.selector));
         strategy.setManager(address(0));
 
-        vm.prank(executor);
+        vm.prank(owner);
         vm.expectRevert(abi.encodeWithSelector(StrategyBaseUpgradeable.ZeroAddress.selector));
         strategy.setExecutor(address(0));
 
-        vm.prank(riskAdmin);
+        vm.prank(owner);
         vm.expectRevert(abi.encodeWithSelector(StrategyBaseUpgradeable.ZeroAddress.selector));
         strategy.setRiskAdmin(address(0));
     }

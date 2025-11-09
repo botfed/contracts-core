@@ -74,25 +74,27 @@ abstract contract StrategyBaseUpgradeable is
         emit ExecutorSet(address(0), executor);
     }
 
-    function _authorizeUpgrade(address) internal override onlyOwner {}
 
-    /* -------------------- admin setters --------------------- */
-    modifier onlyExecutorOrGov() {
-        if (msg.sender != executor && msg.sender != owner()) revert NotAuth();
-        _;
-    }
+    /// Modifiers
 
-    modifier onlyManagerOrGov() {
+    modifier onlyManagerOrOwner() {
         if (msg.sender != manager && msg.sender != owner()) revert NotAuth();
         _;
     }
 
-    modifier onlyRiskAdminOrGov() {
+    modifier onlyExecutorOrOwner() {
+        if (msg.sender != executor && msg.sender != owner()) revert NotAuth();
+        _;
+    }
+
+    modifier onlyRiskAdminOrOwner() {
         if (msg.sender != riskAdmin && msg.sender != owner()) revert NotAuth();
         _;
     }
 
-    function setExecutor(address a) external onlyExecutorOrGov {
+    /// Setters
+
+    function setExecutor(address a) external onlyOwner {
         if (a == address(0)) revert ZeroAddress();
         if (a == riskAdmin) revert InvalidSet();
         address old = executor;
@@ -100,7 +102,7 @@ abstract contract StrategyBaseUpgradeable is
         emit ExecutorSet(old, a);
     }
 
-    function setRiskAdmin(address a) external onlyRiskAdminOrGov {
+    function setRiskAdmin(address a) external onlyOwner {
         if (a == address(0)) revert ZeroAddress();
         if (a == executor) revert InvalidSet();
         address old = riskAdmin;
@@ -118,7 +120,8 @@ abstract contract StrategyBaseUpgradeable is
     /// @notice Transfers up to `assets` of the strategy asset to the manager.
     /// @return withdrawn The amount actually transferred (<= requested and <= balance).
     /// @dev Manager-initiated pull; strategy never pushes proactively.
-    function withdrawToManager(uint256 assets) external onlyManagerOrGov nonReentrant returns (uint256 withdrawn) {
+    function withdrawToManager(uint256 assets) external onlyManagerOrOwner nonReentrant returns (uint256 withdrawn) {
+        if (manager == address(0)) revert ZeroAddress();
         uint256 bal = asset.balanceOf(address(this));
         withdrawn = assets > bal ? bal : assets;
         if (withdrawn > 0) asset.safeTransfer(manager, withdrawn);
@@ -131,5 +134,6 @@ abstract contract StrategyBaseUpgradeable is
         return this.onERC721Received.selector;
     }
 
+    function _authorizeUpgrade(address) internal override onlyOwner {}
     uint256[48] private __gap;
 }

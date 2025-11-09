@@ -53,13 +53,15 @@ contract StrategyManager is Initializable, UUPSUpgradeable, OwnableUpgradeable, 
     error StrategyInvalidOwner();
     error StrategyInvalidAsset();
 
-    modifier onlyExecOrOwner() {
-        if (msg.sender != exec && msg.sender != owner()) revert OnlyExecOrOwner();
-        _;
-    }
+    /* Modifiers */
 
     modifier onlyVault() {
         if (msg.sender != vault) revert OnlyVault();
+        _;
+    }
+
+    modifier onlyExecOrOwner() {
+        if (msg.sender != exec && msg.sender != owner()) revert OnlyExecOrOwner();
         _;
     }
 
@@ -109,6 +111,7 @@ contract StrategyManager is Initializable, UUPSUpgradeable, OwnableUpgradeable, 
     }
 
     function removeStrategy(address strat) external onlyOwner {
+        if (strat == address(0)) revert ZeroAddress();
         if (!isStrategy[strat]) revert StrategyDoesNotExist();
 
         // Find the strategy in the array
@@ -130,6 +133,8 @@ contract StrategyManager is Initializable, UUPSUpgradeable, OwnableUpgradeable, 
     function pushToStrategy(address strat, uint256 amount) external nonReentrant onlyExecOrOwner {
         if (!isStrategy[strat]) revert UnknownStrategy();
         if (amount == 0) revert ZeroAmount();
+        uint256 bal = asset.balanceOf(address(this));
+        if (amount > bal) revert InsufficientAssets(amount, bal);
         asset.safeTransfer(strat, amount);
         strategyDeployed[strat] += amount;
         emit CapitalPushed(strat, amount);
