@@ -120,6 +120,7 @@ contract BotUSDTest is Test {
     MockStrategyManager public manager;
 
     address public owner = makeAddr("owner");
+    address public rewarder = makeAddr("rewarder");
     address public user1 = makeAddr("user1");
     address public user2 = makeAddr("user2");
     address public rando = makeAddr("rando");
@@ -139,7 +140,8 @@ contract BotUSDTest is Test {
             "BotFed USDC Vault",
             "botUSDC",
             owner,
-            address(manager)
+            address(manager),
+            rewarder
         );
         ERC1967Proxy proxy = new ERC1967Proxy(address(vaultImpl), initData);
         vault = BotUSD(payable(address(proxy)));
@@ -171,6 +173,7 @@ contract BotUSDTest is Test {
         // defaults
         assertTrue(vault.userWhitelistActive());
         assertEq(vault.tvlCap(), type(uint256).max);
+        assertTrue(vault.rewarder() == rewarder);
     }
 
     function test_Pause_Unpause_Access() public {
@@ -584,5 +587,73 @@ contract BotUSDTest is Test {
 
         assertEq(out, amt);
         assertEq(vault.totalSupply(), 0);
+    }
+
+    function test_MintReward() public {
+        vm.warp(100 days); // or vm.warp(block.timestamp + 1 days);
+        uint256 amount = 1000e6;
+        deal(address(vault.asset()), user1, 100 * amount);
+        vm.startPrank(user1);
+        IERC20(vault.asset()).approve(address(vault), 100 * amount);
+        vault.deposit(100 * amount, user1);
+        vm.stopPrank();
+        vm.prank(rewarder);
+        vault.mintRewards(amount);
+        assertEq(vault.balanceOf(rewarder), amount);
+    }
+    function test_MintReward_Fail_NotAuth() public {
+        vm.warp(100 days); // or vm.warp(block.timestamp + 1 days);
+        uint256 amount = 1000e6;
+        deal(address(vault.asset()), user1, 100 * amount);
+        vm.startPrank(user1);
+        IERC20(vault.asset()).approve(address(vault), 100 * amount);
+        vault.deposit(100 * amount, user1);
+        vm.stopPrank();
+        vm.prank(rando);
+        vm.expectRevert(BotUSD.NotAuth.selector);
+        vault.mintRewards(amount);
+        assertEq(vault.balanceOf(rewarder), 0);
+    }
+    function test_MintReward_Fails_MintTooMuch() public {
+        vm.warp(100 days); // or vm.warp(block.timestamp + 1 days);
+        uint256 amount = 10000e6;
+        deal(address(vault.asset()), user1, amount);
+        vm.startPrank(user1);
+        IERC20(vault.asset()).approve(address(vault), amount);
+        vault.deposit(amount, user1);
+        vm.stopPrank();
+        uint256 mintAmount = (amount * vault.MAX_INFLATION_PER_MINT_BIPS() + 10_000) / 10_000;
+        vm.prank(rewarder);
+        vm.expectRevert(BotUSD.MintExceedsLimit.selector);
+        vault.mintRewards(amount);
+        assertEq(vault.balanceOf(rewarder), 0);
+    }
+    function test_MintReward_Fail_MintTooSoon() public {
+        uint256 amount = 1000e6;
+        deal(address(vault.asset()), user1, 100 * amount);
+        vm.startPrank(user1);
+        IERC20(vault.asset()).approve(address(vault), 100 * amount);
+        vault.deposit(100 * amount, user1);
+        vm.stopPrank();
+        vm.prank(rewarder);
+        vm.expectRevert(BotUSD.MintTooSoon.selector);
+        vault.mintRewards(amount);
+        assertEq(vault.balanceOf(rewarder), 0);
+    }
+
+    function test_SetRewarder() public {
+        address newR = makeAddr("newR");
+        vm.startPrank(owner);
+        vm.expectEmit(true, true, true, true);
+        emit BotUSD.RewarderSet(vault.rewarder(), newR);
+        vault.setRewarder(newR);
+        vm.stopPrank();
+    }
+    function test_SetRewarder_NotAuth() public {
+        address newR = makeAddr("newR");
+        vm.startPrank(rando);
+        vm.expectRevert();
+        vault.setRewarder(newR);
+        vm.stopPrank();
     }
 }

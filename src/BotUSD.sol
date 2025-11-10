@@ -93,16 +93,16 @@ contract BotUSD is
      *      5% per week = ~260% APY maximum
      *      Generous enough for exceptional performance while maintaining trust
      */
-    uint256 constant MAX_INFLATION_PER_MINT_BIPS = 500;
+    uint256 public constant MAX_INFLATION_PER_MINT_BIPS = 500;
     /// @notice Maximum allowed withdrawal fee (100 = 1%)
-    uint256 constant MAX_WITHDRAWAL_FEE_BIPS = 100;
+    uint256 public constant MAX_WITHDRAWAL_FEE_BIPS = 100;
 
     /**
      * @notice Minimum time between reward mints (1 week)
      * @dev Prevents rapid repeated inflation
      *      Forces reasonable distribution frequency
      */
-    uint256 constant MIN_WAIT_MINT_SECONDS = 7 * 24 * 60 * 60;
+    uint256 public constant MIN_WAIT_MINT_SECONDS = 7 * 24 * 60 * 60;
 
     /* ========== STATE VARIABLES ========== */
 
