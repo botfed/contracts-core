@@ -127,13 +127,6 @@ contract BotUSDTest is Test {
     uint256 constant INITIAL_TOKENS = 1_000_000_000; // 1e9 (with 6 decimals)
 
     /* Re-declare events (matching vault) so expectEmit can use them */
-    event ManagerSet(address indexed a);
-    event RiskAdminSet(address indexed a);
-    event CapitalDeployed(address strat, uint256 amount);
-    event LiquidityPulled(uint256 request, uint256 got);
-    event UserWhitelist(address indexed user, bool isWhitelisted);
-    event UserWhitelistActive(bool isActive);
-    event TVLCapChanged(uint256 newCap);
 
     function setUp() public {
         asset = new MockERC20("Mock USDC", "mUSDC", 6);
@@ -209,10 +202,11 @@ contract BotUSDTest is Test {
         vm.prank(owner);
         vault.pause();
 
-        vm.prank(owner);
+        vm.startPrank(owner);
         vm.expectEmit(true, false, false, true);
-        emit ManagerSet(address(s2));
+        emit BotUSD.ManagerSet(address(vault.manager()), address(s2));
         vault.setManager(address(s2));
+        vm.stopPrank();
         assertEq(address(vault.manager()), address(s2));
     }
 
@@ -242,28 +236,29 @@ contract BotUSDTest is Test {
         vault.setUserWhitelistActive(false);
 
         // rotate risk admin (owner-only)
-        vm.prank(owner);
+        vm.startPrank(owner);
         vm.expectEmit(true, false, false, true);
-        emit RiskAdminSet(newRisk);
+        emit BotUSD.RiskAdminSet(vault.riskAdmin(), newRisk);
         vault.setRiskAdmin(newRisk);
+        vm.stopPrank();
         assertEq(vault.riskAdmin(), newRisk);
 
         // risk admin can set params
         vm.prank(newRisk);
         vm.expectEmit(false, false, false, true);
-        emit UserWhitelistActive(false);
+        emit BotUSD.UserWhitelistActive(false);
         vault.setUserWhitelistActive(false);
         assertEq(vault.userWhitelistActive(), false);
 
         vm.prank(newRisk);
         vm.expectEmit(false, false, false, true);
-        emit TVLCapChanged(1234);
+        emit BotUSD.TVLCapChanged(1234);
         vault.setTVLCap(1234);
         assertEq(vault.tvlCap(), 1234);
 
         vm.prank(newRisk);
         vm.expectEmit(true, false, false, true);
-        emit UserWhitelist(user1, true);
+        emit BotUSD.UserWhitelist(user1, true);
         vault.setUserWhitelist(user1, true);
         assertTrue(vault.userIsWhitelisted(user1));
     }
@@ -308,7 +303,7 @@ contract BotUSDTest is Test {
         asset.mint(stranger, 1000);
         vm.startPrank(stranger);
         asset.approve(address(vault), 1000);
-        vm.expectRevert(bytes("OWL"));
+        vm.expectRevert(BotUSD.NotAuth.selector);
         vault.deposit(1000, stranger);
         vm.stopPrank();
 
@@ -377,7 +372,7 @@ contract BotUSDTest is Test {
 
         vm.startPrank(u);
         d.approve(address(v), 10_000);
-        vm.expectRevert(bytes("RAM"));
+        vm.expectRevert(abi.encodeWithSelector(BotUSD.InsufficientReceived.selector, 10_000, 9900));
         v.deposit(10_000, u);
         vm.stopPrank();
     }
@@ -447,9 +442,9 @@ contract BotUSDTest is Test {
 
         address stranger = makeAddr("stranger");
         vm.startPrank(stranger);
-        vm.expectRevert(bytes("OWL"));
+        vm.expectRevert(BotUSD.NotAuth.selector);
         vault.withdraw(1, stranger, stranger);
-        vm.expectRevert(bytes("OWL"));
+        vm.expectRevert(BotUSD.NotAuth.selector);
         vault.redeem(1, stranger, stranger);
         vm.stopPrank();
 
@@ -470,14 +465,14 @@ contract BotUSDTest is Test {
         vm.startPrank(user1);
         asset.approve(address(vault), 100);
         vm.expectEmit(true, false, false, true);
-        emit CapitalDeployed(address(manager), 100);
+        emit BotUSD.CapitalDeployed(address(manager), 100);
         vault.deposit(100, user1);
         vm.stopPrank();
 
         // Withdraw → LiquidityPulled (vault will need to pull since it holds 0)
         vm.prank(user1);
         vm.expectEmit(false, false, false, true);
-        emit LiquidityPulled(100, 100);
+        emit BotUSD.LiquidityPulled(100, 100);
         vault.withdraw(100, user1, user1);
     }
 

@@ -158,7 +158,7 @@ contract sBotUSD is
         _withdraw(msg.sender, receiver, owner_, assets, shares);
     }
 
-    function maxRedeem(address owner_) public view override returns (uint256) {
+    function maxRedeem(address owner_) public view override returns (uint256 shares) {
         if (paused()) return 0;
         uint256 userShares = balanceOf(owner_);
         uint256 liqInShares = convertToShares(_availableLiquidity());
