@@ -10,15 +10,15 @@ import {ERC4626Upgradeable} from "@openzeppelin/contracts-upgradeable/token/ERC2
 import {ReentrancyGuardUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import {IStrategyManager} from "./StrategyManager.sol";
 import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
+import {ISilo} from "./RewardSilo.sol";
 
 /**
  * @title Pausable4626Vault
  * @notice Upgradeable ERC-4626 vault with pausing. Shares are ERC-20.
- * @dev UUPS upgradeable. Owner can pause/unpause deposit/mint/withdraw/redeem.
+ * @dev UUPS upgradeable. Owner or RiskAdmin can pause/unpause deposit/mint/withdraw/redeem.
  */
-contract Pausable4626Vault is
+contract sBotUSD is
     Initializable,
     ERC4626Upgradeable,
     PausableUpgradeable,
@@ -28,35 +28,21 @@ contract Pausable4626Vault is
 {
     using SafeERC20 for IERC20;
 
-    address public deprecated_withdrawNFT;
-    address public deprecated_fulfiller;
     address public riskAdmin;
-    IStrategyManager public manager;
-    address public deprecated_minter;
-    address public deprecated_rewarder;
-
-    // restrictions on users and tvl
-    uint256 public tvlCap;
-    bool public userWhitelistActive;
-    mapping(address => bool) public userWhitelist;
-
-    mapping(uint256 => uint256) public deprecated_requests;
-    uint256 public deprecated_nextReqId;
-    uint256 public deprecated_amtRequested;
+    ISilo public silo;
 
     /* -- Strategy functions --- */
-    event ManagerSet(address indexed a);
-    event RiskAdminSet(address indexed a);
-    event CapitalDeployed(address strat, uint256 amount);
-    event LiquidityPulled(uint256 request, uint256 got);
-    event UserWhitelist(address indexed user, bool isWhitelisted);
-    event UserWhitelistActive(bool isActive);
-    event TVLCapChanged(uint256 newCap);
+    event SiloSet(address indexed old, address indexed newAddr);
+    event RiskAdminSet(address indexed old, address indexed newAddr);
+    event PullFromSilo(uint256 requested, uint256 got);
 
     /* ---------- errors ---------- */
     error Disabled();
     error Shortfall(uint256 needed, uint256 got);
     error ZeroAddress();
+    error NotAuth();
+    error SiloAssetMismatch();
+    error InsufficientReceived(uint256 expected, uint256 got);
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -74,84 +60,57 @@ contract Pausable4626Vault is
         string memory name_,
         string memory symbol_,
         address initialOwner,
-        address manager_
+        address silo_
     ) public initializer {
-        if (address(asset_) == address(0)) revert(); // asset must be set
-        if (initialOwner == address(0)) revert(); // owner must be set
+        if (address(asset_) == address(0)) revert ZeroAddress();
+        if (initialOwner == address(0)) revert ZeroAddress();
 
         riskAdmin = initialOwner;
-        tvlCap = type(uint256).max;
-        userWhitelistActive = true;
 
-        // Initialize parent contracts
         __ERC20_init(name_, symbol_);
         __ERC4626_init(asset_);
         __Pausable_init();
         __Ownable_init(initialOwner);
         __UUPSUpgradeable_init();
         __ReentrancyGuard_init();
-        _setManager(manager_);
+        _setSilo(silo_);
     }
 
     /* ---- modifiers --- */
 
     modifier onlyRiskAdminOrOwner() {
-        require(msg.sender == riskAdmin || msg.sender == owner(), "ORA");
-        _;
-    }
-    modifier onlyWhitelisted() {
-        require(!userWhitelistActive || userWhitelist[msg.sender], "OWL");
+        if (msg.sender != riskAdmin && msg.sender != owner()) revert NotAuth();
         _;
     }
 
     /*---- role setters ---- */
 
-    function setManager(address a) external onlyOwner whenPaused {
-        _setManager(a);
+    function setSilo(address a) external onlyOwner whenPaused {
+        _setSilo(a);
     }
 
-    function _setManager(address a) internal {
+    function _setSilo(address a) internal {
         if (a == address(0)) revert ZeroAddress();
-        manager = IStrategyManager(a);
-        require(address(manager.asset()) == address(asset()), "A");
-        emit ManagerSet(a);
+        address old = address(silo);
+        silo = ISilo(a);
+        if (address(silo.asset()) != address(asset())) revert SiloAssetMismatch();
+        emit SiloSet(old, a);
     }
 
     function setRiskAdmin(address a) external onlyOwner {
         if (a == address(0)) revert ZeroAddress();
+        address old = riskAdmin;
         riskAdmin = a;
-        emit RiskAdminSet(a);
+        emit RiskAdminSet(old, a);
     }
 
-    /*-- parameter setters --- */
+    // Risk admin functions
 
-    function setUserWhitelist(address a, bool isWhitelisted) external onlyRiskAdminOrOwner {
-        userWhitelist[a] = isWhitelisted;
-        emit UserWhitelist(a, isWhitelisted);
-    }
-
-    function setUserWhitelistActive(bool b) external onlyRiskAdminOrOwner {
-        userWhitelistActive = b;
-        emit UserWhitelistActive(b);
-    }
-
-    function setTVLCap(uint256 newCap) external onlyRiskAdminOrOwner {
-        tvlCap = newCap;
-        emit TVLCapChanged(tvlCap);
-    }
-
-    /* -- some getters */
-    function userIsWhitelisted(address a) external view returns (bool) {
-        return userWhitelist[a];
-    }
-
-    /* ----------------------------- Pausing control ----------------------------- */
-
-    function pause() external onlyOwner {
+    function pause() external onlyRiskAdminOrOwner {
         _pause();
     }
 
-    function unpause() external onlyOwner {
+    function unpause() external onlyRiskAdminOrOwner {
         _unpause();
     }
 
@@ -160,31 +119,24 @@ contract Pausable4626Vault is
     function deposit(
         uint256 assets,
         address receiver
-    ) public override whenNotPaused nonReentrant onlyWhitelisted returns (uint256 shares) {
-        require(address(manager) != address(0), "manager not set");
+    ) public override whenNotPaused nonReentrant returns (uint256 shares) {
         uint256 maxAssets = maxDeposit(receiver);
         if (assets > maxAssets) revert ERC4626ExceededMaxDeposit(receiver, assets, maxAssets);
-        // 1:1 → shares == assets
         shares = previewDeposit(assets);
-        // Check we receive the assets
         uint256 bal0 = IERC20(asset()).balanceOf(address(this));
         IERC20(asset()).safeTransferFrom(msg.sender, address(this), assets);
         uint256 received = IERC20(asset()).balanceOf(address(this)) - bal0;
-        require(received >= assets, "RAM");
-        _pushToManager(received);
+        if (received < assets) revert InsufficientReceived(assets, received);
         _mint(receiver, shares);
         emit Deposit(msg.sender, receiver, assets, shares);
     }
 
     function maxDeposit(address account) public view override returns (uint256) {
         if (paused()) return 0;
-        if (userWhitelistActive && !userWhitelist[account]) return 0;
-        if (tvlCap < totalSupply()) return 0;
-        if (tvlCap < type(uint256).max) return tvlCap - totalSupply();
         return type(uint256).max;
     }
 
-    function mint(uint256, address) public pure override returns (uint256) {
+    function mint(uint256 shares, address receiver) public pure override returns (uint256) {
         revert Disabled();
     }
 
@@ -196,14 +148,12 @@ contract Pausable4626Vault is
         uint256 shares,
         address receiver,
         address owner_
-    ) public override whenNotPaused nonReentrant onlyWhitelisted returns (uint256 assets) {
+    ) public override whenNotPaused nonReentrant returns (uint256 assets) {
         uint256 maxShares = maxRedeem(owner_);
         if (shares > maxShares) revert ERC4626ExceededMaxRedeem(owner_, shares, maxShares);
-        // 1:1 assets to shares
         assets = previewRedeem(shares);
-        // Ensure liquidity before internal withdraw
         uint256 bal = IERC20(asset()).balanceOf(address(this));
-        if (bal < assets) _pullFromManager(assets - bal);
+        if (bal < assets) _pullFromSilo(assets - bal);
         _withdraw(msg.sender, receiver, owner_, assets, shares);
     }
 
@@ -218,60 +168,54 @@ contract Pausable4626Vault is
         uint256 assets,
         address receiver,
         address owner_
-    ) public override whenNotPaused nonReentrant onlyWhitelisted returns (uint256 shares) {
-        // withdraw path
+    ) public override whenNotPaused nonReentrant returns (uint256 shares) {
         uint256 maxAssets = maxWithdraw(owner_);
         if (assets > maxAssets) revert ERC4626ExceededMaxWithdraw(owner_, assets, maxAssets);
         shares = previewWithdraw(assets);
-        // Ensure liquidity before internal withdraw
         uint256 bal = IERC20(asset()).balanceOf(address(this));
-        if (bal < assets) _pullFromManager(assets - bal);
-        // Single standard path
+        if (bal < assets) _pullFromSilo(assets - bal);
         _withdraw(msg.sender, receiver, owner_, assets, shares);
     }
 
     function maxWithdraw(address owner_) public view override returns (uint256) {
         if (paused()) return 0;
-        // User can’t withdraw more than their balance (1:1 shares/assets)
-        uint256 userBal = convertToAssets(balanceOf(owner_)); // == balanceOf(owner_)
+        uint256 userBal = convertToAssets(balanceOf(owner_));
         uint256 liq = _availableLiquidity();
-        // Min(user balance, available liquidity)
         return userBal < liq ? userBal : liq;
-    }
-
-    function totalAssets() public view override returns (uint256) {
-        // simplest CPPS invariant: principal == totalSupply()
-        return totalSupply();
     }
 
     function _availableLiquidity() internal view returns (uint256) {
         uint256 bal = IERC20(asset()).balanceOf(address(this));
-        if (address(manager) == address(0)) return bal;
-        uint256 m = manager.maxWithdrawable();
-        // Defensive: avoid accidental overflow (not realistically hit with ERC20)
+        if (address(silo) == address(0)) return bal;
+        uint256 m = silo.maxWithdrawable();
         unchecked {
             return bal + m;
         }
     }
 
+    function _pullFromSilo(uint256 requested) internal {
+        if (requested == 0) return;
+        if (address(silo) == address(0)) revert ZeroAddress();
+        uint256 b0 = IERC20(asset()).balanceOf(address(this));
+        silo.withdrawToVault(requested);
+        uint256 got = IERC20(asset()).balanceOf(address(this)) - b0;
+        if (got < requested) revert Shortfall(requested, got);
+        emit PullFromSilo(requested, got);
+    }
+
+    // Helper function in case of silo migration to avoid stranded funds.
+    function drainFromSilo(uint256 amount) external onlyOwner whenPaused nonReentrant {
+        _pullFromSilo(amount);
+    }
+    // Ops: pause → drain → setSilo → unpause
+
+    // @dev totalAssets() = on-vault balance + silo.maxWithdrawable(), i.e., assets immediately available to this vault.
+    function totalAssets() public view override returns (uint256) {
+        return IERC20(asset()).balanceOf(address(this)) + (address(silo) != address(0) ? silo.maxWithdrawable() : 0);
+    }
+
     function decimals() public view override(ERC4626Upgradeable) returns (uint8) {
         return IERC20Metadata(address(asset())).decimals();
-    }
-
-    function _pushToManager(uint256 amt) internal {
-        if (address(manager) == address(0)) revert ZeroAddress();
-        IERC20(address(asset())).safeTransfer(address(manager), amt);
-        emit CapitalDeployed(address(manager), amt);
-    }
-
-    function _pullFromManager(uint256 needed) internal {
-        if (needed == 0) return;
-        require(address(manager) != address(0), "manager not set");
-        uint256 b0 = IERC20(asset()).balanceOf(address(this));
-        manager.withdrawToVault(needed);
-        uint256 got = IERC20(asset()).balanceOf(address(this)) - b0;
-        if (got < needed) revert Shortfall(needed, got);
-        emit LiquidityPulled(needed, got);
     }
 
     function _authorizeUpgrade(address newImplementation) internal override onlyOwner {}
