@@ -6,7 +6,7 @@ import {console} from "forge-std/console.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
-import {Pausable4626Vault} from "../src/Pausable4626Vault.sol";
+import {BotUSD} from "../src/BotUSD.sol";
 
 /* ────────────────────────────────────────────
  *                    Mocks
@@ -114,9 +114,9 @@ contract ShortManager is MockStrategyManager {
  *                Test Suite
  * ──────────────────────────────────────────── */
 
-contract Pausable4626VaultTest is Test {
-    Pausable4626Vault public vault;
-    Pausable4626Vault public vaultImpl;
+contract BotUSDTest is Test {
+    BotUSD public vault;
+    BotUSD public vaultImpl;
     MockERC20 public asset; // 6 decimals (USDC-like)
     MockStrategyManager public manager;
 
@@ -140,9 +140,9 @@ contract Pausable4626VaultTest is Test {
         asset = new MockERC20("Mock USDC", "mUSDC", 6);
         manager = new MockStrategyManager(asset);
 
-        vaultImpl = new Pausable4626Vault();
+        vaultImpl = new BotUSD();
         bytes memory initData = abi.encodeWithSelector(
-            Pausable4626Vault.initialize.selector,
+            BotUSD.initialize.selector,
             address(asset),
             "BotFed USDC Vault",
             "botUSDC",
@@ -150,7 +150,7 @@ contract Pausable4626VaultTest is Test {
             address(manager)
         );
         ERC1967Proxy proxy = new ERC1967Proxy(address(vaultImpl), initData);
-        vault = Pausable4626Vault(payable(address(proxy)));
+        vault = BotUSD(payable(address(proxy)));
 
         manager.setVault(address(vault));
 
@@ -222,7 +222,7 @@ contract Pausable4626VaultTest is Test {
         vault.pause();
 
         vm.prank(owner);
-        vm.expectRevert(Pausable4626Vault.ZeroAddress.selector);
+        vm.expectRevert(BotUSD.ZeroAddress.selector);
         vault.setManager(address(0));
 
         MockERC20 otherAsset = new MockERC20("X", "X", 6);
@@ -357,17 +357,17 @@ contract Pausable4626VaultTest is Test {
     function test_Deposit_Reverts_On_FeeOnTransfer() public {
         DeflToken d = new DeflToken();
         MockStrategyManager m2 = new MockStrategyManager(d);
-        Pausable4626Vault impl = new Pausable4626Vault();
+        BotUSD impl = new BotUSD();
 
         bytes memory init = abi.encodeWithSelector(
-            Pausable4626Vault.initialize.selector,
+            BotUSD.initialize.selector,
             address(d),
             "n",
             "s",
             owner,
             address(m2)
         );
-        Pausable4626Vault v = Pausable4626Vault(address(new ERC1967Proxy(address(impl), init)));
+        BotUSD v = BotUSD(address(new ERC1967Proxy(address(impl), init)));
         m2.setVault(address(v));
 
         address u = makeAddr("u");
@@ -557,7 +557,7 @@ contract Pausable4626VaultTest is Test {
     }
 
     function test_Upgrade_UUPS_OnlyOwner() public {
-        Pausable4626Vault newImpl = new Pausable4626Vault();
+        BotUSD newImpl = new BotUSD();
 
         vm.prank(rando);
         vm.expectRevert(); // onlyOwner

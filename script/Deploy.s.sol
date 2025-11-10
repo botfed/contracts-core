@@ -6,7 +6,7 @@ import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.s
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 import {StrategyManager} from "../src/StrategyManager.sol";
-import {Pausable4626Vault} from "../src/Pausable4626Vault.sol";
+import {BotUSD} from "../src/BotUSD.sol";
 
 // Interface for WETH validation
 interface IERC20Extended {
@@ -60,8 +60,8 @@ contract DeployScript is Script {
         console.log("Deploying StrategyManager implementation...");
         StrategyManager strategyManagerImpl = new StrategyManager();
 
-        console.log("Deploying Pausable4626Vault implementation...");
-        Pausable4626Vault vaultImpl = new Pausable4626Vault();
+        console.log("Deploying BotUSD implementation...");
+        BotUSD vaultImpl = new BotUSD();
 
         // Deploy StrategyManager proxy
         console.log("Deploying StrategyManager proxy...");
@@ -73,15 +73,16 @@ contract DeployScript is Script {
         ERC1967Proxy strategyManagerProxy = new ERC1967Proxy(address(strategyManagerImpl), strategyManagerInitData);
 
         // Deploy Vault proxy
-        console.log("Deploying Pausable4626Vault proxy...");
+        console.log("Deploying BotUSD proxy...");
         bytes memory vaultInitData = abi.encodeCall(
-            Pausable4626Vault.initialize,
+            BotUSD.initialize,
             (
                 IERC20(config.asset),
                 config.vaultName,
                 config.vaultSymbol,
                 config.owner,
-                address(strategyManagerProxy)
+                address(strategyManagerProxy),
+                address(0)
             )
         );
 
@@ -104,15 +105,15 @@ contract DeployScript is Script {
         console.log("Exec:", config.exec);
         console.log("\n=== IMPLEMENTATION CONTRACTS ===");
         console.log("StrategyManager Implementation:", address(strategyManagerImpl));
-        console.log("Pausable4626Vault Implementation:", address(vaultImpl));
+        console.log("BotUSD Implementation:", address(vaultImpl));
         console.log("\n=== PROXY CONTRACTS ===");
         console.log("StrategyManager Proxy:", address(strategyManagerProxy));
-        console.log("Pausable4626Vault Proxy:", address(vaultProxy));
+        console.log("BotUSD Proxy:", address(vaultProxy));
 
         // Verify deployment
         console.log("\n=== VERIFICATION ===");
         StrategyManager sm = StrategyManager(payable(address(strategyManagerProxy)));
-        Pausable4626Vault vault = Pausable4626Vault(payable(address(vaultProxy)));
+        BotUSD vault = BotUSD(payable(address(vaultProxy)));
 
         console.log("StrategyManager asset:", address(sm.asset()));
         console.log("StrategyManager owner:", sm.owner());
@@ -244,7 +245,7 @@ contract DeployVaultImpl is Script {
         require(asset == USDC_BASE || asset == WETH_BASE, "Asset not USDC or WETH");
 
         vm.startBroadcast(pk);
-        Pausable4626Vault impl = new Pausable4626Vault();
+        BotUSD impl = new BotUSD();
         vm.stopBroadcast();
 
         console.log("Deployed Vault implementation (asset-bound):");

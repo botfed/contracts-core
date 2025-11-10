@@ -35,6 +35,7 @@ contract sBotUSD is
     event SiloSet(address indexed old, address indexed newAddr);
     event RiskAdminSet(address indexed old, address indexed newAddr);
     event PullFromSilo(uint256 requested, uint256 got);
+    event SiloDrained(uint256 amount);
 
     /* ---------- errors ---------- */
     error Disabled();
@@ -206,6 +207,7 @@ contract sBotUSD is
     // Helper function in case of silo migration to avoid stranded funds.
     function drainFromSilo(uint256 amount) external onlyOwner whenPaused nonReentrant {
         _pullFromSilo(amount);
+        emit SiloDrained(amount);
     }
     // Ops: pause → drain → setSilo → unpause
 

@@ -249,7 +249,6 @@ contract BotUSD is
 
     event WithdrawalFeeChanged(uint256 newFeeBips);
     event FeeReceiverSet(address indexed oldReceiver, address indexed newReceiver);
-    event InsufficientReceived(uint256 expected, uint256 received);
 
     /* ========== ERRORS ========== */
 
@@ -272,6 +271,7 @@ contract BotUSD is
     error MintExceedsLimit();
 
     error FeeTooHigh();
+    error InsufficientReceived(uint256 expected, uint256 received);
 
     /* ========== CONSTRUCTOR ========== */
 
@@ -609,14 +609,14 @@ contract BotUSD is
      * @param shares Amount of BotUSD to redeem
      * @param receiver Address to receive USDC
      * @param owner_ Owner of shares being redeemed
-     * @return assets Amount of USDC withdrawn (equals shares due to 1:1)
+     * @return assetsAfterFee Amount of USDC withdrawn (equals shares due to 1:1)
      *
      * Requirements:
      * - Contract must not be paused
      * - Caller must be whitelisted (if whitelist active)
      * - Must have approval if caller != owner
      * - Sufficient liquidity must be available
-     */
+     **/
 
     function redeem(
         uint256 shares,
@@ -629,7 +629,7 @@ contract BotUSD is
         // Get gross assets corresponding to `shares` from the base ERC4626 logic
         uint256 gross = super.previewRedeem(shares); // avoids our override
 
-        uint256 fee = withdrawFeeBips == 0 ? 0 : (gross * withdrawFeeBips) / 10_000;
+        uint256 fee = withdrawalFeeBips == 0 ? 0 : (gross * withdrawalFeeBips) / 10_000;
         assetsAfterFee = gross - fee;
 
         // Ensure we have enough liquidity to cover gross (net + fee)
@@ -648,8 +648,8 @@ contract BotUSD is
     // Fee-aware preview: returns net to receiver for a given `shares`
     function previewRedeem(uint256 shares) public view override returns (uint256 assets) {
         uint256 gross = super.previewRedeem(shares); // base 4626 value
-        if (withdrawFeeBips == 0) return gross;
-        uint256 fee = (gross * withdrawFeeBips) / 10_000;
+        if (withdrawalFeeBips == 0) return gross;
+        uint256 fee = (gross * withdrawalFeeBips) / 10_000;
         return gross - fee;
     }
 
@@ -719,14 +719,13 @@ contract BotUSD is
         uint256 userAssets = convertToAssets(balanceOf(owner_));
         uint256 liq = _availableLiquidity();
 
-        uint256 withdrawFeeBips = withdrawalFeeBips;
-        if (withdrawFeeBips == 0) {
+        if (withdrawalFeeBips == 0) {
             // No fee → net equals min(userAssets, liq)
             return userAssets < liq ? userAssets : liq;
         }
 
         // net = floor(limit * 10000 / (10000 + bips))
-        uint256 denom = 10_000 + withdrawFeeBips;
+        uint256 denom = 10_000 + withdrawalFeeBips;
         uint256 maxNetByBalance = (userAssets * 10_000) / denom;
         uint256 maxNetByLiquidity = (liq * 10_000) / denom;
 
@@ -844,7 +843,7 @@ contract BotUSD is
     /**
      * @dev Storage gap for future upgrades
      * Original: 50 slots
-     * Used: 2 slots for lastRewardMintTime, withdrawFeeBips (Nov 10 2025)
+     * Used: 2 slots for lastRewardMintTime, withdrawalFeeBips (Nov 10 2025)
      * Remaining: 48 slots
      */
     uint256[48] private __gap;
