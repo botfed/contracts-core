@@ -100,6 +100,7 @@ contract RewardSilo is
     /// @notice Amount from previous mints that has dripped but not been withdrawn
     /// @dev Synced at start of each new mint to preserve unredeemed rewards
     uint256 public accumulated;
+    uint256 public withdrawn;
 
     /// @notice Timestamp of the last mintRewards() call
     /// @dev Used to calculate linear drip progress
@@ -232,6 +233,7 @@ contract RewardSilo is
      */
     function mintRewards(uint256 amount) external onlyOwner whenNotPaused {
         accumulated = maxWithdrawable();
+        withdrawn = 0;
 
         lastUndripped = asset.balanceOf(address(this)) - accumulated + amount;
 
@@ -255,7 +257,7 @@ contract RewardSilo is
             newlyDripped = (lastUndripped * elapsed) / DRIP_DURATION_SECONDS;
         }
         uint256 bal = asset.balanceOf(address(this));
-        uint256 theoretical = accumulated + newlyDripped;
+        uint256 theoretical = accumulated + newlyDripped - withdrawn;
 
         return theoretical <= bal ? theoretical : bal;
     }
@@ -281,7 +283,7 @@ contract RewardSilo is
         if (amount > available) revert MaxWithdrawExceeded();
 
         // Update accumulated to remaining dripped amount
-        accumulated = available - amount;
+        withdrawn += amount;
 
         // Transfer rewards to vault
         IERC20(asset).safeTransfer(vault, amount);

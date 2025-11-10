@@ -2,11 +2,19 @@
 pragma solidity ^0.8.24;
 
 import "forge-std/Test.sol";
-import "../src/RewardSilo.sol";
+import {RewardSilo, IMintableBotUSD, OwnableUpgradeable} from "../src/RewardSilo.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {PausableUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
+import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 
-/// @dev Minimal mock of IMintableBotUSD with rewarder gating.
-/// - 6 decimals like USDC/typical stablecoins.
-/// - `mintRewards(amount)` can only be called by `rewarder`.
+/* ----------------------------- UUPS upgrade ------------------------------ */
+contract RewardSiloV2 is RewardSilo {
+    function version() external pure returns (string memory) {
+        return "v2";
+    }
+}
+
+/* ---------------------- Mock BotUSD (mintRewards gated) ---------------------- */
 contract MockMintableBotUSD is IERC20 {
     string public name = "Mock BotUSD";
     string public symbol = "mBotUSD";
@@ -25,7 +33,7 @@ contract MockMintableBotUSD is IERC20 {
         rewarder = r;
     }
 
-    // --- IERC20 ---
+    // IERC20
     function totalSupply() external view returns (uint256) {
         return _supply;
     }
@@ -66,76 +74,66 @@ contract MockMintableBotUSD is IERC20 {
         emit Transfer(from, to, amt);
     }
 
-    // --- Minting for tests ---
-    function _mint(address to, uint256 amt) internal {
-        _supply += amt;
-        _bal[to] += amt;
-        emit Transfer(address(0), to, amt);
-    }
-
-    /// @dev Match RewardSilo expectation: BotUSD enforces access control.
+    // RewardSilo expects: only rewarder can mint to itself
     function mintRewards(uint256 amount) external {
         require(msg.sender == rewarder, "not-rewarder");
-        _mint(msg.sender, amount);
+        _supply += amount;
+        _bal[msg.sender] += amount;
+        emit Transfer(address(0), msg.sender, amount);
     }
 }
 
+/* --------------------------------- Tests ---------------------------------- */
 contract RewardSiloTest is Test {
-    // constants mirroring the contract
     uint256 constant WEEK = 7 days;
 
-    RewardSilo silo;
+    RewardSilo impl; // implementation
+    RewardSilo silo; // proxy (cast to RewardSilo)
+    ERC1967Proxy proxy; // raw proxy
     MockMintableBotUSD token;
 
     address owner = address(0xA11CE);
     address vault = address(0xBEEF);
     address stranger = address(0xCAFE);
 
+    /* --------- Setup: deploy impl + proxy, call initialize via proxy --------- */
     function setUp() public {
-        vm.startPrank(owner);
-
-        // deploy token + silo
         token = new MockMintableBotUSD();
-        silo = new RewardSilo();
+        impl = new RewardSilo();
 
-        // initialize silo
-        silo.initialize(IMintableBotUSD(address(token)), owner, vault);
+        bytes memory initData = abi.encodeWithSelector(
+            RewardSilo.initialize.selector,
+            IMintableBotUSD(address(token)),
+            owner,
+            vault
+        );
+        proxy = new ERC1967Proxy(address(impl), initData);
+        silo = RewardSilo(address(proxy));
 
-        // set rewarder on token to silo (so silo can call token.mintRewards)
+        // allow proxy (silo) to call token.mintRewards
         token.setRewarder(address(silo));
-
-        vm.stopPrank();
     }
 
-    // ----------------- helpers -----------------
-
+    /* ------------------------------- Helpers -------------------------------- */
     function _approxEq(uint256 a, uint256 b, uint256 tol) internal pure {
-        if (a > b) {
-            require(a - b <= tol, "not approx equal (a>b)");
-        } else {
-            require(b - a <= tol, "not approx equal (b>a)");
-        }
-    }
-    function _approxEq(uint256 a, uint256 b, uint256 tol, string memory msg) internal pure {
-        if (a > b) {
-            require(a - b <= tol, msg);
-        } else {
-            require(b - a <= tol, msg);
-        }
+        if (a > b) require(a - b <= tol, "approx(a>b)");
+        else require(b - a <= tol, "approx(b>a)");
     }
 
-    // ----------------- tests -----------------
-
-    function testInitValues() public {
+    /* ---------------------------- Basic smoke tests -------------------------- */
+    function testInitThroughProxy() public {
         assertEq(address(silo.asset()), address(token), "asset");
         assertEq(silo.vault(), vault, "vault");
-        // lastMintTime is set to block.timestamp on initialize
-        // not asserting exact value due to test runner timing
+        // Ownable: ensure non-owner cannot pause
+        vm.prank(stranger);
+        vm.expectRevert(abi.encodeWithSelector(OwnableUpgradeable.OwnableUnauthorizedAccount.selector, stranger));
+        silo.pause();
     }
 
+    /* ---------------------------- Pause / Unpause ---------------------------- */
     function testOnlyOwnerPauseUnpause() public {
         vm.prank(stranger);
-        vm.expectRevert("Ownable: caller is not the owner");
+        vm.expectRevert(abi.encodeWithSelector(OwnableUpgradeable.OwnableUnauthorizedAccount.selector, stranger));
         silo.pause();
 
         vm.prank(owner);
@@ -143,7 +141,7 @@ contract RewardSiloTest is Test {
         assertTrue(silo.paused());
 
         vm.prank(stranger);
-        vm.expectRevert("Ownable: caller is not the owner");
+        vm.expectRevert(abi.encodeWithSelector(OwnableUpgradeable.OwnableUnauthorizedAccount.selector, stranger));
         silo.unpause();
 
         vm.prank(owner);
@@ -151,78 +149,79 @@ contract RewardSiloTest is Test {
         assertFalse(silo.paused());
     }
 
+    /* ----------------------- setVault (onlyOwner, paused) -------------------- */
     function testSetVaultOnlyOwnerWhenPaused() public {
         vm.prank(owner);
         silo.pause();
 
         address newVault = address(0xD00D);
-        vm.expectEmit(true, true, false, true);
+
+        vm.expectEmit(true, true, false, true, address(silo));
         emit RewardSilo.VaultSet(vault, newVault);
 
         vm.prank(owner);
         silo.setVault(newVault);
         assertEq(silo.vault(), newVault, "vault updated");
 
-        // not paused => revert
+        // Not paused -> revert
         vm.prank(owner);
         silo.unpause();
         vm.prank(owner);
-        vm.expectRevert(PausableUpgradeable.EnforcedPause.selector);
+        vm.expectRevert(PausableUpgradeable.ExpectedPause.selector);
         silo.setVault(address(0x1234));
     }
 
-    function testMintRewardsAndLinearDrip() public {
-        uint256 amt = 1_000_000e6; // 1,000,000 with 6 decimals
+    /* -------------------------- Drip: single schedule ------------------------ */
+    function testMintRewardsThroughProxyLinearDrip() public {
+        uint256 amt = 1_000_000e6;
 
-        // initial: available = 0
-        assertEq(silo.maxWithdrawable(), 0, "initially zero");
-
-        // mint (owner only)
+        // t=0
         vm.prank(owner);
+        uint256 t0 = block.timestamp;
+        vm.expectEmit(false, false, false, true, address(silo));
+        emit RewardSilo.Minted(amt, t0);
         silo.mintRewards(amt);
 
-        // immediately after mint: still zero available (drip starts at 0)
         assertEq(silo.maxWithdrawable(), 0, "t=0 available");
 
-        // half period
         vm.warp(block.timestamp + WEEK / 2);
         uint256 half = silo.maxWithdrawable();
-        _approxEq(half, amt / 2, 1, "half drip");
+        assertApproxEqAbs(half, amt / 2, 1, "half");
 
-        // full period
         vm.warp(block.timestamp + WEEK / 2 + 1);
         uint256 full = silo.maxWithdrawable();
-        _approxEq(full, amt, 1, "full drip");
+        assertApproxEqAbs(full, amt, 1, "full");
     }
 
+    /* ------------------------- Withdraw: only vault -------------------------- */
     function testWithdrawOnlyVaultAndStateUpdate() public {
         uint256 amt = 500_000e6;
 
         vm.prank(owner);
         silo.mintRewards(amt);
 
-        // drip half
         vm.warp(block.timestamp + WEEK / 2);
         uint256 available = silo.maxWithdrawable();
-        _approxEq(available, amt / 2, 1, "available ~ half");
+        _approxEq(available, amt / 2, 1);
 
         // non-vault cannot withdraw
         vm.prank(stranger);
-        vm.expectRevert(abi.encodeWithSignature("NotAuth()"));
+        vm.expectRevert(RewardSilo.NotAuth.selector);
         silo.withdrawToVault(available);
 
         // vault withdraws a portion
-        uint256 pull = available / 3;
+        uint256 pull = available / 2;
         vm.prank(vault);
-        vm.expectEmit(false, false, false, true);
+        vm.expectEmit(false, false, false, true, address(silo));
         emit RewardSilo.Withdrawn(pull);
         silo.withdrawToVault(pull);
 
-        // availability reduced by pull (accumulated updated)
+        // availability reduced by pull
         uint256 left = silo.maxWithdrawable();
-        _approxEq(left, available - pull, 2, "reduced after withdraw");
+        _approxEq(left, available - pull, 2);
     }
 
+    /* ---------------------- Rollover carries undripped ----------------------- */
     function testRolloverCarriesUndripped() public {
         uint256 A = 900_000e6;
         uint256 B = 300_000e6;
@@ -233,42 +232,38 @@ contract RewardSiloTest is Test {
         vm.warp(block.timestamp + WEEK / 3);
 
         uint256 beforeRollAvail = silo.maxWithdrawable();
-        _approxEq(beforeRollAvail, A / 3, 2, "A/3 available");
+        _approxEq(beforeRollAvail, A / 3, 2);
 
-        // Mint B (rollover):
+        // Mint B (rollover): accumulated becomes A/3, lastUndripped = 2A/3 + B
         vm.prank(owner);
         silo.mintRewards(B);
 
-        // After rollover:
-        // accumulated == previous available (A/3)
-        uint256 afterAccum = silo.maxWithdrawable(); // includes 0 newly yet
-        // immediately after mintRewards(), elapsed = 0 => available == accumulated
-        _approxEq(afterAccum, A / 3, 2, "accumulated == A/3");
+        // immediately after: elapsed=0 => available == accumulated == A/3
+        uint256 afterAccum = silo.maxWithdrawable();
+        _approxEq(afterAccum, A / 3, 2);
 
-        // Now let half a week pass post-roll
+        // half week after rollover
         vm.warp(block.timestamp + WEEK / 2);
-
-        // Expected new drip = (remaining of A: 2A/3) + B, dripping linearly over a week
         uint256 remainingPlusB = ((2 * A) / 3) + B;
-        uint256 expectedNewly = remainingPlusB / 2; // half-week
+        uint256 expectedNewly = remainingPlusB / 2;
         uint256 expectedAvail = (A / 3) + expectedNewly;
 
-        uint256 gotAvail = silo.maxWithdrawable();
-        _approxEq(gotAvail, expectedAvail, 3, "rolled drip half week");
+        uint256 got = silo.maxWithdrawable();
+        _approxEq(got, expectedAvail, 3);
     }
 
+    /* -------------------------- Pause behavior semantics --------------------- */
     function testPausedBehavior() public {
         uint256 amt = 100_000e6;
 
         vm.prank(owner);
         silo.mintRewards(amt);
 
-        // pause
         vm.prank(owner);
         silo.pause();
 
-        // paused => maxWithdrawable = 0
-        assertEq(silo.maxWithdrawable(), 0, "paused returns 0 available");
+        // paused => available=0
+        assertEq(silo.maxWithdrawable(), 0);
 
         // paused => mintRewards reverts
         vm.prank(owner);
@@ -280,14 +275,15 @@ contract RewardSiloTest is Test {
         vm.expectRevert(PausableUpgradeable.EnforcedPause.selector);
         silo.withdrawToVault(1);
 
-        // unpause to sanity check availability jumps forward
+        // time passes while paused; on unpause, availability jumps forward
         vm.warp(block.timestamp + WEEK);
         vm.prank(owner);
         silo.unpause();
-        // should be full amount now available
-        _approxEq(silo.maxWithdrawable(), amt, 1, "catch-up after unpause");
+
+        assertApproxEqAbs(silo.maxWithdrawable(), amt, 1);
     }
 
+    /* -------------------- Availability capped to on-chain bal ---------------- */
     function testAvailabilityCappedToBalance() public {
         uint256 amt = 200_000e6;
 
@@ -297,32 +293,42 @@ contract RewardSiloTest is Test {
         // Let 3/4 drip
         vm.warp(block.timestamp + (3 * WEEK) / 4);
         uint256 theoretical = silo.maxWithdrawable();
-        _approxEq(theoretical, (amt * 3) / 4, 2, "3/4 drip");
+        _approxEq(theoretical, (amt * 3) / 4, 2);
 
-        // Simulate unexpected token outflow: drain 50k from silo's balance
-        // We spoof the sender as the silo to move its own balance (for test purposes).
-        vm.prank(address(silo));
+        // Simulate unexpected token outflow: move 50k from silo's balance
+        vm.prank(address(silo)); // spoof caller as the proxy (holder)
         IERC20(address(token)).transfer(address(0xDEAD), 50_000e6);
 
-        // Now maxWithdrawable must be min(theoretical, balanceOf(silo))
+        // Now availability = min(theoretical, balanceOf(silo))
         uint256 bal = IERC20(address(token)).balanceOf(address(silo));
         uint256 capped = silo.maxWithdrawable();
-        assertEq(capped, bal, "availability capped to on-chain balance");
+        assertEq(capped, bal, "capped to balance");
     }
 
+    /* ------------------------------- Events ---------------------------------- */
     function testEventsOnMintAndWithdraw() public {
         uint256 amt = 123_456e6;
 
-        vm.expectEmit(false, false, false, true);
-        emit RewardSilo.Minted(amt, block.timestamp); // timestamp checked loosely by forge
         vm.prank(owner);
+        uint256 t0 = block.timestamp;
+        vm.expectEmit(false, false, false, true, address(silo));
+        emit RewardSilo.Minted(amt, t0);
         silo.mintRewards(amt);
 
-        // warp and withdraw from vault to emit Withdrawn
         vm.warp(block.timestamp + WEEK);
         vm.prank(vault);
-        vm.expectEmit(false, false, false, true);
+        vm.expectEmit(false, false, false, true, address(silo));
         emit RewardSilo.Withdrawn(amt);
         silo.withdrawToVault(amt);
+    }
+
+    function testUUPSUpgrade() public {
+        RewardSiloV2 newImpl = new RewardSiloV2();
+
+        vm.prank(owner); // onlyOwner
+        silo.upgradeToAndCall(address(newImpl), "");
+
+        RewardSiloV2 siloV2 = RewardSiloV2(address(silo));
+        assertEq(siloV2.version(), "v2");
     }
 }
