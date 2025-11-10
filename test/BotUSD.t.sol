@@ -121,6 +121,7 @@ contract BotUSDTest is Test {
 
     address public owner = makeAddr("owner");
     address public rewarder = makeAddr("rewarder");
+    address public feeReceiver = makeAddr("feeRec");
     address public user1 = makeAddr("user1");
     address public user2 = makeAddr("user2");
     address public rando = makeAddr("rando");
@@ -149,10 +150,11 @@ contract BotUSDTest is Test {
         manager.setVault(address(vault));
 
         // Whitelist
-        vm.prank(owner);
+        vm.startPrank(owner);
         vault.setUserWhitelist(user1, true);
-        vm.prank(owner);
         vault.setUserWhitelist(user2, true);
+        vault.setFeeReceiver(feeReceiver);
+        vm.stopPrank();
 
         // Seed balances
         asset.mint(user1, INITIAL_TOKENS);
@@ -382,21 +384,17 @@ contract BotUSDTest is Test {
 
     /* ── Withdraw / Redeem ─────────────────────────────────────────────────── */
 
-    function test_Withdraw_PullsFromManager() public {
-        uint256 amount = 500_000;
+    function test_Withdraw_Disabled() public {
+        uint256 amount = 700_000;
         _approveAndDeposit(user1, amount);
 
-        assertEq(asset.balanceOf(address(vault)), 0);
-        uint256 managerBalBefore = asset.balanceOf(address(manager));
-
-        vm.prank(user1);
-        uint256 sharesBurned = vault.withdraw(amount, user1, user1);
-
-        assertEq(sharesBurned, amount);
-        assertEq(asset.balanceOf(user1), INITIAL_TOKENS);
-        assertEq(asset.balanceOf(address(manager)), managerBalBefore - amount);
-        assertEq(asset.balanceOf(address(vault)), 0);
-        assertEq(vault.totalSupply(), 0);
+        vm.startPrank(user1);
+        vault.approve(address(vault), amount);
+        vm.expectRevert(BotUSD.Disabled.selector);
+        vault.withdraw(amount, user1, user1);
+        vm.stopPrank();
+        assertEq(vault.maxWithdraw(user1), 0);
+        assertEq(vault.previewWithdraw(amount), 0);
     }
 
     function test_Redeem_PullsFromManager() public {
@@ -417,11 +415,7 @@ contract BotUSDTest is Test {
         _approveAndDeposit(user1, 123);
 
         vm.prank(user1);
-        (bool success, ) = address(vault).call(abi.encodeWithSelector(vault.withdraw.selector, 0, user1, user1));
-        assertTrue(success);
-
-        vm.prank(user1);
-        (success, ) = address(vault).call(abi.encodeWithSelector(vault.redeem.selector, 0, user1, user1));
+        (bool success, ) = address(vault).call(abi.encodeWithSelector(vault.redeem.selector, 0, user1, user1));
         assertTrue(success);
     }
 
@@ -430,10 +424,6 @@ contract BotUSDTest is Test {
 
         vm.prank(owner);
         vault.pause();
-
-        vm.prank(user1);
-        vm.expectRevert();
-        vault.withdraw(1, user1, user1);
 
         vm.prank(user1);
         vm.expectRevert();
@@ -446,8 +436,6 @@ contract BotUSDTest is Test {
         address stranger = makeAddr("stranger");
         vm.startPrank(stranger);
         vm.expectRevert(BotUSD.NotAuth.selector);
-        vault.withdraw(1, stranger, stranger);
-        vm.expectRevert(BotUSD.NotAuth.selector);
         vault.redeem(1, stranger, stranger);
         vm.stopPrank();
 
@@ -459,7 +447,7 @@ contract BotUSDTest is Test {
         vm.startPrank(stranger);
         IERC20(address(asset)).approve(address(vault), 1);
         vault.deposit(1, stranger);
-        vault.withdraw(1, stranger, stranger);
+        vault.redeem(1, stranger, stranger);
         vm.stopPrank();
     }
 
@@ -476,7 +464,7 @@ contract BotUSDTest is Test {
         vm.prank(user1);
         vm.expectEmit(false, false, false, true);
         emit BotUSD.LiquidityPulled(100, 100);
-        vault.withdraw(100, user1, user1);
+        vault.redeem(100, user1, user1);
     }
 
     /* ── Previews & Limits ─────────────────────────────────────────────────── */
@@ -487,7 +475,7 @@ contract BotUSDTest is Test {
         assertEq(vault.convertToShares(100), 100);
         assertEq(vault.convertToAssets(100), 100);
         assertEq(vault.previewDeposit(100), 100);
-        assertEq(vault.previewWithdraw(100), 100);
+        assertEq(vault.previewWithdraw(100), 0);
         assertEq(vault.previewMint(100), 100);
         assertEq(vault.previewRedeem(100), 100);
     }
@@ -497,11 +485,11 @@ contract BotUSDTest is Test {
 
         uint256 mw = vault.maxWithdraw(user1);
         uint256 mr = vault.maxRedeem(user1);
-        assertEq(mw, 1_000);
+        assertEq(mw, 0);
         assertEq(mr, 1_000);
     }
 
-    function test_MaxWithdraw_Reflects_Current_Liquidity_Scenario() public {
+    function test_MaxRedeem_Reflects_Current_Liquidity_Scenario() public {
         _approveAndDeposit(user1, 2_000);
 
         // switch to manager with limited liquidity (500)
@@ -516,17 +504,16 @@ contract BotUSDTest is Test {
         vm.prank(owner);
         vault.unpause();
 
-        assertEq(vault.maxWithdraw(user1), 500);
         assertEq(vault.maxRedeem(user1), 500);
 
         vm.startPrank(user1);
         vm.expectRevert(); // ERC4626ExceededMaxWithdraw
-        vault.withdraw(600, user1, user1);
+        vault.redeem(600, user1, user1);
         vm.stopPrank();
 
         vm.prank(user1);
-        uint256 burned = vault.withdraw(500, user1, user1);
-        assertEq(burned, 500);
+        uint256 amount = vault.redeem(500, user1, user1);
+        assertEq(amount, 500);
     }
 
     function test_PullFromManager_Shortfall_Reverts() public {
@@ -544,7 +531,7 @@ contract BotUSDTest is Test {
 
         vm.prank(user1);
         vm.expectRevert();
-        vault.withdraw(600, user1, user1);
+        vault.redeem(600, user1, user1);
     }
 
     /* ── Decimals & Upgradeability ─────────────────────────────────────────── */
@@ -655,5 +642,47 @@ contract BotUSDTest is Test {
         vm.expectRevert();
         vault.setRewarder(newR);
         vm.stopPrank();
+    }
+    function test_SetWithdrawalFee() public {
+        uint256 newFee = 25;
+        vm.startPrank(owner);
+        vm.expectEmit(true, true, true, true);
+        emit BotUSD.WithdrawalFeeChanged(newFee);
+        vault.setWithdrawalFee(newFee);
+        vm.stopPrank();
+    }
+    function test_SetWithdrawalFee_NotAuth() public {
+        uint256 newFee = vault.MAX_WITHDRAWAL_FEE_BIPS();
+        vm.startPrank(rando);
+        vm.expectRevert();
+        vault.setWithdrawalFee(newFee);
+        vm.stopPrank();
+    }
+    function test_SetWithdrawalFee_TooHigh() public {
+        uint256 newFee = vault.MAX_WITHDRAWAL_FEE_BIPS() + 1;
+        vm.startPrank(owner);
+        vm.expectRevert(BotUSD.FeeTooHigh.selector);
+        vault.setWithdrawalFee(newFee);
+        vm.stopPrank();
+    }
+    function test_Redeem_WithFee() public {
+        uint256 amount = 1000e6;
+        deal(address(vault.asset()), user1, amount);
+        vm.startPrank(user1);
+        IERC20(vault.asset()).approve(address(vault), amount);
+        vault.deposit(amount, user1);
+        vm.stopPrank();
+        assertEq(vault.balanceOf(user1), amount);
+        vm.prank(owner);
+        vault.setWithdrawalFee(50);
+
+        uint256 expected = vault.previewRedeem(amount);
+        vm.startPrank(user1);
+        vault.approve(address(vault), amount);
+        uint256 received = vault.redeem(amount, user1, user1);
+        vm.stopPrank();
+        assertEq(expected, received);
+        uint256 expectedFee = (amount * 50) / 10_000;
+        assertTrue(expected <= amount - expectedFee && expected >= amount - expectedFee - 1);
     }
 }

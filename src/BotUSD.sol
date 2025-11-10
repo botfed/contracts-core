@@ -667,69 +667,20 @@ contract BotUSD is
         return userShares < liqInShares ? userShares : liqInShares;
     }
 
-    /**
-     * @notice Withdraws exact assets by burning shares
-     * @dev Alternative to redeem() when user wants specific asset amount
-     *
-     * @param assets Amount of USDC to withdraw
-     * @param receiver Address to receive USDC
-     * @param owner_ Owner of shares being burned
-     * @return shares Amount of BotUSD burned (equals assets due to 1:1)
-     *
-     * Requirements: Same as redeem()
-     */
     function withdraw(
         uint256 assets,
         address receiver,
         address owner_
     ) public override whenNotPaused nonReentrant onlyWhitelisted returns (uint256 shares) {
-        uint256 maxNet = maxWithdraw(owner_);
-        if (assets > maxNet) revert ERC4626ExceededMaxWithdraw(owner_, assets, maxNet);
-
-        uint256 fee = (assets * withdrawalFeeBips) / 10_000;
-        uint256 gross = assets + fee;
-
-        shares = super.previewWithdraw(gross);
-
-        uint256 bal = IERC20(asset()).balanceOf(address(this));
-        if (bal < gross) _pullFromManager(gross - bal);
-
-        if (fee > 0 && feeReceiver != address(0)) {
-            IERC20(asset()).safeTransfer(feeReceiver, fee);
-        }
-
-        _withdraw(msg.sender, receiver, owner_, assets, shares);
+        revert Disabled();
     }
+
     function previewWithdraw(uint256 assets) public view override returns (uint256 shares) {
-        uint256 fee = (assets * withdrawalFeeBips) / 10_000;
-        uint256 gross = assets + fee;
-        return super.previewWithdraw(gross); // PPS=1 ⇒ equals gross, but keep via super
+        return 0;
     }
 
-    /**
-     * @notice Returns maximum withdrawable assets for owner
-     * @dev Limited by both user balance and available liquidity
-     *
-     * @param owner_ Address to check withdrawal limit for
-     * @return Maximum withdrawable assets
-     */
     function maxWithdraw(address owner_) public view override returns (uint256) {
-        if (paused()) return 0;
-
-        uint256 userAssets = convertToAssets(balanceOf(owner_));
-        uint256 liq = _availableLiquidity();
-
-        if (withdrawalFeeBips == 0) {
-            // No fee → net equals min(userAssets, liq)
-            return userAssets < liq ? userAssets : liq;
-        }
-
-        // net = floor(limit * 10000 / (10000 + bips))
-        uint256 denom = 10_000 + withdrawalFeeBips;
-        uint256 maxNetByBalance = (userAssets * 10_000) / denom;
-        uint256 maxNetByLiquidity = (liq * 10_000) / denom;
-
-        return maxNetByBalance < maxNetByLiquidity ? maxNetByBalance : maxNetByLiquidity;
+        return 0;
     }
 
     /**
