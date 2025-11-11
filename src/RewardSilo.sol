@@ -87,7 +87,8 @@ contract RewardSilo is
     /* ========== CONSTANTS ========== */
 
     /// @notice Duration over which rewards are dripped linearly (1 week)
-    uint256 constant DRIP_DURATION_SECONDS = 7 * 24 * 60 * 60;
+    uint256 public constant DRIP_DURATION_SECONDS = 7 * 24 * 60 * 60;
+    uint256 public constant MAX_PERFORMANCE_FEE_BIPS = 5000; // 50%;
 
     /* ========== STATE VARIABLES ========== */
 
@@ -105,8 +106,9 @@ contract RewardSilo is
     /// @notice Timestamp of the last mintRewards() call
     /// @dev Used to calculate linear drip progress
     uint256 public lastMintTime;
-
     uint256 public lastUndripped;
+    address public feeReceiver;
+    uint256 public performanceFee;
 
     /* ========== EVENTS ========== */
 
@@ -129,6 +131,10 @@ contract RewardSilo is
      */
     event VaultSet(address indexed oldVault, address indexed newVault);
 
+    event FeeChanged(uint256 oldVal, uint256 newVal);
+    event FeeReceiverSet(address indexed oldReceiver, address indexed newReceiver);
+    event PerformanceFeePaid(uint256 amount, address indexed receiver);
+
     /* ========== ERRORS ========== */
 
     /// @notice Thrown when trying to withdraw more than maxWithdrawable()
@@ -139,6 +145,8 @@ contract RewardSilo is
 
     /// @notice Thrown when zero address is provided where not allowed
     error ZeroAddress();
+
+    error FeeTooHigh();
 
     /* ========== MODIFIERS ========== */
 
@@ -167,13 +175,23 @@ contract RewardSilo is
      * @param initialOwner Address that will own the contract
      * @param vault_ StakingVault address authorized to withdraw rewards
      */
-    function initialize(IMintableBotUSD asset_, address initialOwner, address vault_) public initializer {
+    function initialize(
+        IMintableBotUSD asset_,
+        address initialOwner,
+        address vault_,
+        address feeReceiver_,
+        uint256 initFee
+    ) public initializer {
         if (address(asset_) == address(0)) revert ZeroAddress();
         if (initialOwner == address(0)) revert ZeroAddress();
         if (vault_ == address(0)) revert ZeroAddress();
+        if (initFee > MAX_PERFORMANCE_FEE_BIPS) revert FeeTooHigh();
+        if (initFee > 0 && feeReceiver == address(0)) revert ZeroAddress();
 
         asset = asset_;
         vault = vault_;
+        feeReceiver = feeReceiver_;
+        performanceFee = initFee;
         lastMintTime = block.timestamp;
 
         __Pausable_init();
@@ -207,9 +225,21 @@ contract RewardSilo is
      */
     function setVault(address vault_) external onlyOwner whenPaused {
         if (vault_ == address(0)) revert ZeroAddress();
-        address old = vault;
+        emit VaultSet(vault, vault_);
         vault = vault_;
-        emit VaultSet(old, vault_);
+    }
+
+    function setFeeReceiver(address newReceiver) external onlyOwner whenPaused {
+        if (newReceiver == address(0)) revert ZeroAddress();
+        emit FeeReceiverSet(feeReceiver, newReceiver);
+        feeReceiver = newReceiver;
+    }
+
+    function setPerformanceFee(uint256 newVal) external onlyOwner whenPaused {
+        if (newVal > MAX_PERFORMANCE_FEE_BIPS) revert FeeTooHigh();
+        if (feeReceiver == address(0)) revert ZeroAddress();
+        emit FeeChanged(performanceFee, newVal);
+        performanceFee = newVal;
     }
 
     /* ========== REWARD FUNCTIONS ========== */
@@ -231,15 +261,30 @@ contract RewardSilo is
      * - Caller must be owner
      * - Amount must pass BotUSD contract's minting limits (5% max, 1 week cooldown)
      */
+
     function mintRewards(uint256 amount) external onlyOwner whenNotPaused {
+        // crystallize current drip
         accumulated = maxWithdrawable();
         withdrawn = 0;
 
-        lastUndripped = asset.balanceOf(address(this)) - accumulated + amount;
+        uint256 fee = (amount * performanceFee) / 10_000;
 
+        // Mint first
+        asset.mintRewards(amount);
+
+        // Pay fee if configured
+        if (fee > 0 && feeReceiver != address(0)) {
+            IERC20(asset).safeTransfer(feeReceiver, fee);
+            emit PerformanceFeePaid(fee, feeReceiver);
+        } else {
+            // if no receiver, fee is effectively 0 for this mint
+            fee = 0;
+        }
+
+        // Set new epoch baseline from actual post-mint, post-fee balance
+        lastUndripped = asset.balanceOf(address(this)) - accumulated;
         lastMintTime = block.timestamp;
-        // Mint new rewards to this contract (BotUSD enforces its own limits)
-        asset.mintRewards(amount); // (or asset.mintRewards(address(this), amount) if you choose Option B)
+
         emit Minted(amount, block.timestamp);
     }
 

@@ -94,6 +94,7 @@ contract RewardSiloTest is Test {
 
     address owner = address(0xA11CE);
     address vault = address(0xBEEF);
+    address feeReceiver = address(0xFEEE);
     address stranger = address(0xCAFE);
 
     /* --------- Setup: deploy impl + proxy, call initialize via proxy --------- */
@@ -105,7 +106,9 @@ contract RewardSiloTest is Test {
             RewardSilo.initialize.selector,
             IMintableBotUSD(address(token)),
             owner,
-            vault
+            vault,
+            feeReceiver,
+            0
         );
         proxy = new ERC1967Proxy(address(impl), initData);
         silo = RewardSilo(address(proxy));
