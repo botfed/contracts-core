@@ -193,7 +193,6 @@ contract RewardSilo is
     ) public initializer {
         if (address(asset_) == address(0)) revert ZeroAddress();
         if (initialOwner == address(0)) revert ZeroAddress();
-        if (vault_ == address(0)) revert ZeroAddress();
         if (initFee > MAX_PERFORMANCE_FEE_BIPS) revert FeeTooHigh();
         if (initFee > 0 && feeReceiver == address(0)) revert ZeroAddress();
 
@@ -233,19 +232,23 @@ contract RewardSilo is
      * @dev Only callable by owner when paused. Use with extreme caution.
      * @param vault_ New vault address
      */
-    function setVault(address vault_) external onlyOwner whenPaused {
+    function setVault(address vault_) external onlyOwner {
         if (vault_ == address(0)) revert ZeroAddress();
+        // if vault initialized, require paused
+        if (vault != address(0)) {
+            _requirePaused();
+        }
         emit VaultSet(vault, vault_);
         vault = vault_;
     }
 
-    function setFeeReceiver(address newReceiver) external onlyOwner whenPaused {
+    function setFeeReceiver(address newReceiver) external onlyOwner {
         if (newReceiver == address(0)) revert ZeroAddress();
         emit FeeReceiverSet(feeReceiver, newReceiver);
         feeReceiver = newReceiver;
     }
 
-    function setPerformanceFee(uint256 newVal) external onlyOwner whenPaused {
+    function setPerformanceFee(uint256 newVal) external onlyOwner {
         if (newVal > MAX_PERFORMANCE_FEE_BIPS) revert FeeTooHigh();
         if (feeReceiver == address(0)) revert ZeroAddress();
         emit FeeChanged(performanceFee, newVal);
@@ -280,6 +283,7 @@ contract RewardSilo is
 
     function mintRewards(uint256 amount) external onlyOwner whenNotPaused nonReentrant {
         if (amount == 0) return;
+        if (vault == address(0)) revert ZeroAddress();
         // crystallize current drip
         accumulated = maxWithdrawable();
         withdrawn = 0;

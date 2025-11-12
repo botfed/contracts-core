@@ -46,7 +46,13 @@ contract DeployRewardSilo is Script {
         console.log("Deploying RewardSilo proxy...");
         bytes memory initData = abi.encodeCall(
             RewardSilo.initialize,
-            (IMintableBotUSD(config.botUSD), config.owner, config.vault, config.feeReceiver, config.initFee)
+            (
+                IMintableBotUSD(config.botUSD),
+                config.owner,
+                address(0),  // vault is address(0) initially - set after sBotUSD deployment
+                config.feeReceiver,
+                config.initFee
+            )
         );
 
         ERC1967Proxy rewardSiloProxy = new ERC1967Proxy(address(rewardSiloImpl), initData);
@@ -59,7 +65,7 @@ contract DeployRewardSilo is Script {
         console.log("Deployer:", deployer);
         console.log("BotUSD:", config.botUSD);
         console.log("Owner:", config.owner);
-        console.log("Vault:", config.vault);
+        console.log("Vault: address(0) - TO BE SET AFTER sBotUSD DEPLOYMENT");
         console.log("Fee Receiver:", config.feeReceiver);
         console.log("Init Fee:", config.initFee, "bips");
         console.log("\n=== IMPLEMENTATION CONTRACT ===");
@@ -79,6 +85,15 @@ contract DeployRewardSilo is Script {
         console.log("RewardSilo dripDuration:", silo.dripDuration(), "seconds");
         console.log("RewardSilo paused:", silo.paused());
 
+        console.log("\n=== NEXT STEPS ===");
+        console.log("1. Deploy sBotUSD (StakingVault) with RewardSilo address:", address(rewardSiloProxy));
+        console.log("2. After sBotUSD deployment, set vault address:");
+        console.log("   forge script script/DeployRewardSilo.s.sol:SetRewardSiloVault \\");
+        console.log("     --rpc-url $BASE_RPC_URL --broadcast");
+        console.log("   Required env vars:");
+        console.log("   - REWARD_SILO=", address(rewardSiloProxy));
+        console.log("   - SBOTUSD_ADDRESS=<deployed_sbotusd_address>");
+
         console.log("\n=== SAVE THESE ADDRESSES ===");
         console.log("# Copy this to your .env file:");
         console.log("REWARD_SILO_IMPL=", address(rewardSiloImpl));
@@ -89,7 +104,6 @@ contract DeployRewardSilo is Script {
         // Required parameters
         address botUSD = vm.envAddress("BOTUSD_ADDRESS");
         address owner = vm.envAddress("BF_GOV");
-        address vault = vm.envAddress("STAKED_BOTUSD_ADDRESS");
 
         // Optional parameters - default to address(0) and 0 if not set
         address feeReceiver;
@@ -109,7 +123,13 @@ contract DeployRewardSilo is Script {
             console.log("INIT_FEE_BIPS not set, using 0");
         }
 
-        return DeployConfig({botUSD: botUSD, owner: owner, vault: vault, feeReceiver: feeReceiver, initFee: initFee});
+        return DeployConfig({
+            botUSD: botUSD,
+            owner: owner,
+            vault: address(0),  // Always deploy with address(0), set after sBotUSD deployment
+            feeReceiver: feeReceiver,
+            initFee: initFee
+        });
     }
 }
 
