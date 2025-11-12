@@ -36,10 +36,7 @@ contract MockERC20 is ERC20 {
 
 // Simple ERC4626 vault for testing
 contract MockVault is ERC4626 {
-    constructor(IERC20 asset_, string memory name_, string memory symbol_) 
-        ERC4626(asset_)
-        ERC20(name_, symbol_) 
-    {}
+    constructor(IERC20 asset_, string memory name_, string memory symbol_) ERC4626(asset_) ERC20(name_, symbol_) {}
 
     function mint(address to, uint256 amount) external {
         _mint(to, amount);
@@ -194,7 +191,7 @@ contract sBotUSDTest is Test {
         vm.startPrank(user);
         usdc.approve(address(baseVault), usdcAmt);
         uint256 vaultShares = baseVault.deposit(usdcAmt, user);
-        
+
         // Then stake vault shares to get sBotUSD
         IERC20(address(baseVault)).approve(address(stakingVault), vaultShares);
         uint256 shares = stakingVault.deposit(vaultShares, user);
@@ -343,7 +340,7 @@ contract sBotUSDTest is Test {
 
     function testZapBuy() public {
         uint256 usdcAmount = 25_000e6;
-        
+
         vm.startPrank(user);
         usdc.approve(address(stakingVault), usdcAmount);
         uint256 shares = stakingVault.zapBuy(usdcAmount, user);
@@ -356,12 +353,13 @@ contract sBotUSDTest is Test {
 
     function testZapSell() public {
         uint256 usdcAmount = 25_000e6;
-        
+
         // First zapBuy
         vm.startPrank(user);
         usdc.approve(address(stakingVault), usdcAmount);
         uint256 shares = stakingVault.zapBuy(usdcAmount, user);
         vm.stopPrank();
+        console.log("shares", shares, stakingVault.previewDeposit(usdcAmount));
 
         // zapSell
         vm.startPrank(user);
