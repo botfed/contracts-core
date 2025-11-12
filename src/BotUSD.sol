@@ -112,14 +112,14 @@ contract BotUSD is
 
     // State variable (reuse deprecated slot)
     /// @notice Address that receives withdrawal fees
-    address public feeReceiver; // formerly deprecated_minter (deprecated)
+    address public feeReceiver; // formerly address deprecated_minter (deprecated)
 
     /**
      * @notice RewardSilo address authorized to mint inflationary rewards
      * @dev Mints BotUSD based on protocol profits for staking incentives
      *      Subject to MAX_INFLATION_PER_MINT_BIPS and MIN_WAIT_MINT_SECONDS limits
      */
-    address public rewarder; // previously deprecated_rewarder
+    address public rewarder; // previously address deprecated_rewarder
 
     /**
      * @notice Maximum total value locked (in BotUSD units)
@@ -146,13 +146,15 @@ contract BotUSD is
      * @dev Used to enforce MIN_WAIT_MINT_SECONDS cooldown
      *      Starts at 0, allowing immediate first mint
      */
-    uint256 public lastRewardMintTime; //formerly mapping deprecated_requests
+    uint256 public lastRewardMintTime; //formerly mapping(uint256 => struct) deprecated_requests
 
     /// @notice Withdrawal fee in basis points (25 = 0.25%)
-    uint256 public withdrawalFeeBips; // formerly deprecated_nextReqId
+    uint256 public withdrawalFeeBips; // formerly unint256 deprecated_nextReqId
 
     /// @dev Deprecated: Previously used for total requested amount tracking
     uint256 public deprecated_amtRequested;
+
+    uint256 public version; // upgrade version counter
 
     /* ========== EVENTS ========== */
 
@@ -224,6 +226,7 @@ contract BotUSD is
      * @param amount Amount of BotUSD burned
      */
     event Burned(address indexed from, uint256 amount);
+    event VersionUpgraded(uint256 indexed newVersion);
 
     event WithdrawalFeeChanged(uint256 newFeeBips);
     event FeeReceiverSet(address indexed oldReceiver, address indexed newReceiver);
@@ -761,6 +764,19 @@ contract BotUSD is
 
     /* ========== UPGRADE AUTHORIZATION ========== */
 
+    function initializeV1(uint256 _targetAssets) external onlyOwner {
+        require(version == 0, "Already initialized");
+        deprecated_withdrawNFT = address(0);
+        deprecated_fulfiller = address(0);
+        feeReceiver = address(0);
+        rewarder = address(0);
+        tvlCap = 1e6 * 10 ** IERC20Metadata(asset()).decimals();
+        lastRewardMintTime = block.timestamp;
+        withdrawalFeeBips = 0;
+        deprecated_amtRequested = 0;
+        version += 1;
+        emit VersionUpgraded(version);
+    }
     /**
      * @notice Authorizes contract upgrades
      * @dev Only callable by owner. Part of UUPS upgrade pattern.
@@ -774,8 +790,8 @@ contract BotUSD is
     /**
      * @dev Storage gap for future upgrades
      * Original: 50 slots
-     * Used: 2 slots for lastRewardMintTime, withdrawalFeeBips (Nov 10 2025)
-     * Remaining: 48 slots
+     * Used: 1 slots for version (Nov 12 2025)
+     * Remaining: 49 slots
      */
-    uint256[48] private __gap;
+    uint256[49] private __gap;
 }
