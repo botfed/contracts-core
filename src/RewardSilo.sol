@@ -35,7 +35,7 @@ interface IMintableBotUSD is IERC20 {
 interface ISilo {
     /**
      * @notice Returns the underlying reward asset
-     * @return IERC20 address of the reward token
+     * @return IMintableBotUSD address of the reward token
      */
     function asset() external view returns (IMintableBotUSD);
 

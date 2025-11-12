@@ -52,6 +52,7 @@ contract sBotUSD is
     error SiloAssetMismatch();
     error InsufficientReceived(uint256 expected, uint256 got);
     error ZeroShares();
+    error ZeroAssets();
     error ZeroAmount();
 
     /// @custom:oz-upgrades-unsafe-allow constructor
@@ -134,12 +135,13 @@ contract sBotUSD is
      * @return shares Amount of sBotUSD received
      */
     function zapBuy(uint256 usdcAmount, address receiver) external whenNotPaused nonReentrant returns (uint256 shares) {
-        if (usdcAmount == 0) revert ZeroAmount();
+        if (usdcAmount == 0) return 0;
         address baseVault = asset();
         IERC20 usdc = IERC20(ERC4626Upgradeable(baseVault).asset());
 
         // 1. Preview how many base vault shares we'll get
         uint256 expectedBaseShares = ERC4626Upgradeable(baseVault).previewDeposit(usdcAmount);
+        if (expectedBaseShares == 0) revert ZeroShares();
 
         // 2. Preview how many sBotUSD shares user will get for those base shares
         shares = previewDeposit(expectedBaseShares);
@@ -176,13 +178,15 @@ contract sBotUSD is
         address receiver,
         address owner
     ) external whenNotPaused nonReentrant returns (uint256 usdcAmount) {
-        if (sBotUsdShares == 0) revert ZeroAmount();
+        if (sBotUsdShares == 0) return 0;
         // 1. Redeem sBotUSD for BotUSD
         uint256 botUsdAmount = _redeemInternal(sBotUsdShares, address(this), owner);
+        if (botUsdAmount == 0) revert ZeroAssets();
 
         // 2. Redeem BotUSD for USDC (this handles withdrawal fee)
         IERC20(asset()).forceApprove(asset(), botUsdAmount);
         usdcAmount = ERC4626Upgradeable(asset()).redeem(botUsdAmount, receiver, address(this));
+        if (usdcAmount == 0) revert ZeroAssets();
 
         emit ZapSell(msg.sender, receiver, owner, sBotUsdShares, usdcAmount);
     }
@@ -193,14 +197,11 @@ contract sBotUSD is
         uint256 assets,
         address receiver
     ) public override whenNotPaused nonReentrant returns (uint256 shares) {
-        return _depositInternal(assets, receiver);
-    }
-
-    function _depositInternal(uint256 assets, address receiver) internal whenNotPaused returns (uint256 shares) {
+        if (assets == 0) return 0;
         uint256 maxAssets = maxDeposit(receiver);
         if (assets > maxAssets) revert ERC4626ExceededMaxDeposit(receiver, assets, maxAssets);
         shares = previewDeposit(assets);
-        if (shares == 0) revert ZeroShares();
+        if (assets > 0 && shares == 0) revert ZeroShares();
         uint256 bal0 = IERC20(asset()).balanceOf(address(this));
         IERC20(asset()).safeTransferFrom(msg.sender, address(this), assets);
         uint256 received = IERC20(asset()).balanceOf(address(this)) - bal0;
@@ -229,9 +230,11 @@ contract sBotUSD is
         return _redeemInternal(shares, receiver, owner_);
     }
     function _redeemInternal(uint256 shares, address receiver, address owner_) internal returns (uint256 assets) {
+        if (shares == 0) return 0;
         uint256 maxShares = maxRedeem(owner_);
         if (shares > maxShares) revert ERC4626ExceededMaxRedeem(owner_, shares, maxShares);
         assets = previewRedeem(shares);
+        if (shares > 0 && assets == 0) revert ZeroAssets();
         uint256 bal = IERC20(asset()).balanceOf(address(this));
         if (bal < assets) _pullFromSilo(assets - bal);
         _withdraw(msg.sender, receiver, owner_, assets, shares);
@@ -249,9 +252,11 @@ contract sBotUSD is
         address receiver,
         address owner_
     ) public override whenNotPaused nonReentrant returns (uint256 shares) {
+        if (assets == 0) return 0;
         uint256 maxAssets = maxWithdraw(owner_);
         if (assets > maxAssets) revert ERC4626ExceededMaxWithdraw(owner_, assets, maxAssets);
         shares = previewWithdraw(assets);
+        if (assets > 0 && shares == 0) revert ZeroShares();
         uint256 bal = IERC20(asset()).balanceOf(address(this));
         if (bal < assets) _pullFromSilo(assets - bal);
         _withdraw(msg.sender, receiver, owner_, assets, shares);

@@ -102,7 +102,7 @@ contract BotUSD is
      * @dev Prevents rapid repeated inflation
      *      Forces reasonable distribution frequency
      */
-    uint256 public constant MIN_WAIT_MINT_SECONDS = 7 * 24 * 60 * 60;
+    uint256 public constant MIN_WAIT_MINT_SECONDS = 7 days;
 
     /* ========== STATE VARIABLES ========== */
 
@@ -249,6 +249,7 @@ contract BotUSD is
 
     event WithdrawalFeeChanged(uint256 newFeeBips);
     event FeeReceiverSet(address indexed oldReceiver, address indexed newReceiver);
+    error ZeroShares();
 
     /* ========== ERRORS ========== */
 
@@ -525,6 +526,8 @@ contract BotUSD is
         if (assets > maxAssets) revert ERC4626ExceededMaxDeposit(receiver, assets, maxAssets);
 
         shares = previewDeposit(assets);
+        // Prevent donations for small amounts or inflation attack
+        if (shares == 0) revert ZeroShares();
 
         // Verify full amount received (protect against fee-on-transfer tokens)
         uint256 bal0 = IERC20(asset()).balanceOf(address(this));
