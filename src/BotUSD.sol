@@ -87,29 +87,13 @@ contract BotUSD is
 
     /* ========== CONSTANTS ========== */
 
-    /**
-     * @notice Maximum inflation per mint in basis points (5%)
-     * @dev Caps reward minting to prevent excessive inflation
-     *      5% per week = ~260% APY maximum
-     *      Generous enough for exceptional performance while maintaining trust
-     */
     uint256 public constant MAX_INFLATION_PER_MINT_BIPS = 500;
-    /// @notice Maximum allowed withdrawal fee (100 = 1%)
-    uint256 public constant MAX_WITHDRAWAL_FEE_BIPS = 100;
-
-    /**
-     * @notice Minimum time between reward mints (1 week)
-     * @dev Prevents rapid repeated inflation
-     *      Forces reasonable distribution frequency
-     */
     uint256 public constant MIN_WAIT_MINT_SECONDS = 7 days;
+    uint256 public constant MAX_WITHDRAWAL_FEE_BIPS = 100;
 
     /* ========== STATE VARIABLES ========== */
 
-    /// @dev Deprecated: Previously used for withdraw NFT system
     address public deprecated_withdrawNFT;
-
-    /// @dev Deprecated: Previously used for fulfill withdraw requests
     address public deprecated_fulfiller;
 
     /**
@@ -128,14 +112,14 @@ contract BotUSD is
 
     // State variable (reuse deprecated slot)
     /// @notice Address that receives withdrawal fees
-    address public feeReceiver;
+    address public feeReceiver; // formerly deprecated_minter (deprecated)
 
     /**
      * @notice RewardSilo address authorized to mint inflationary rewards
      * @dev Mints BotUSD based on protocol profits for staking incentives
      *      Subject to MAX_INFLATION_PER_MINT_BIPS and MIN_WAIT_MINT_SECONDS limits
      */
-    address public rewarder;
+    address public rewarder; // previously deprecated_rewarder
 
     /**
      * @notice Maximum total value locked (in BotUSD units)
@@ -157,24 +141,18 @@ contract BotUSD is
      */
     mapping(address => bool) public userWhitelist;
 
-    /// @dev Deprecated: Previously used for tracking withdraw requests
-    mapping(uint256 => uint256) public deprecated_requests;
-
-    /// @dev Deprecated: Previously used for request ID tracking
-    uint256 public deprecated_nextReqId;
-
-    /// @dev Deprecated: Previously used for total requested amount tracking
-    uint256 public deprecated_amtRequested;
-
     /**
      * @notice Timestamp of last reward mint
      * @dev Used to enforce MIN_WAIT_MINT_SECONDS cooldown
      *      Starts at 0, allowing immediate first mint
      */
-    uint256 public lastRewardMintTime;
+    uint256 public lastRewardMintTime; //formerly mapping deprecated_requests
 
     /// @notice Withdrawal fee in basis points (25 = 0.25%)
-    uint256 public withdrawalFeeBips;
+    uint256 public withdrawalFeeBips; // formerly deprecated_nextReqId
+
+    /// @dev Deprecated: Previously used for total requested amount tracking
+    uint256 public deprecated_amtRequested;
 
     /* ========== EVENTS ========== */
 
