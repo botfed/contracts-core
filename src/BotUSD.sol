@@ -777,18 +777,21 @@ contract BotUSD is
 
     /* ========== UPGRADE AUTHORIZATION ========== */
 
-    function initializeV1(uint256 _targetAssets) external onlyOwner {
+    function initializeV1(address rewarder_, address feeReceiver_) external onlyOwner {
         require(version == 0, "Already initialized");
         deprecatedWithdrawNFT = address(0);
         deprecatedFulfiller = address(0);
-        feeReceiver = address(0);
-        rewarder = address(0);
+        rewarder = rewarder_;
+        feeReceiver = feeReceiver_;
         tvlCap = 1e6 * 10 ** IERC20Metadata(asset()).decimals();
         lastRewardMintTime = block.timestamp;
         withdrawalFeeBips = 0;
         deprecatedAmtRequested = 0;
         version += 1;
         emit VersionUpgraded(version);
+        // Pause so we can manually review that rewarder and other sensitive params
+        // were correctly set.
+        pause();
     }
     /**
      * @notice Authorizes contract upgrades
