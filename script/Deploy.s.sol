@@ -23,13 +23,10 @@ contract DeployScript is Script {
 
     // Deployment configuration - UPDATE THESE
     struct DeployConfig {
-        address asset; // Asset token (WETH)
+        address asset; // Asset token (USDC)
         address owner; // Contract owner
-        address treasury; // Treasury address for fees
         address exec; // Executor address
         address riskAdmin; // riskAdmin address for vault
-        address minter;
-        address rewarder;
         string vaultName; // Vault token name
         string vaultSymbol; // Vault token symbol
     }
@@ -47,7 +44,6 @@ contract DeployScript is Script {
         // Remove balance check as it might cause RPC issues
         // console.log("Deployer balance:", deployer.balance);
         console.log("Config owner:", config.owner);
-        console.log("Config treasury:", config.treasury);
 
         require(config.asset == USDC_BASE || config.asset == WETH_BASE, "Asset not USDC or WETH");
 
@@ -82,6 +78,7 @@ contract DeployScript is Script {
                 config.vaultSymbol,
                 config.owner,
                 address(strategyManagerProxy),
+                address(0),
                 address(0)
             )
         );
@@ -101,8 +98,7 @@ contract DeployScript is Script {
         console.log("Deployer:", deployer);
         console.log("Asset:", config.asset);
         console.log("Owner:", config.owner);
-        console.log("Treasury:", config.treasury);
-        console.log("Exec:", config.exec);
+        console.log("Strat Manager Exec:", config.exec);
         console.log("\n=== IMPLEMENTATION CONTRACTS ===");
         console.log("StrategyManager Implementation:", address(strategyManagerImpl));
         console.log("BotUSD Implementation:", address(vaultImpl));
@@ -138,10 +134,7 @@ contract DeployScript is Script {
     function getDeployConfig(address deployer) internal view returns (DeployConfig memory) {
         // Try to get config from environment variables, default to deployer
         address owner = vm.envAddress("BF_GOV");
-        address treasury = vm.envAddress("BF_TREASURY");
         address riskAdmin = vm.envAddress("BF_RISK_ADMIN");
-        address minter = vm.envAddress("BF_MINTER");
-        address rewarder = vm.envAddress("BF_REWARDER");
         address exec = vm.envAddress("BF_STRAT_MANAGER_EXEC");
         address asset = vm.envAddress("ASSET");
 
@@ -154,69 +147,11 @@ contract DeployScript is Script {
             DeployConfig({
                 asset: asset,
                 owner: owner,
-                treasury: treasury,
                 exec: exec,
                 riskAdmin: riskAdmin,
-                minter: minter,
-                rewarder: rewarder,
                 vaultName: vaultName,
                 vaultSymbol: vaultSymbol
             });
-    }
-    function validateWETHAddress(address wethAddr) internal view {
-        console.log("=== VALIDATING WETH ADDRESS ===");
-        console.log("WETH address to validate:", wethAddr);
-
-        require(wethAddr != address(0), "WETH address cannot be zero");
-
-        // Check if it's a contract
-        uint256 codeSize;
-        assembly {
-            codeSize := extcodesize(wethAddr)
-        }
-        require(codeSize > 0, "WETH address is not a contract");
-        console.log("WETH address is a contract");
-
-        IERC20Extended weth = IERC20Extended(wethAddr);
-
-        // Check symbol
-        try weth.symbol() returns (string memory symbol) {
-            console.log("Token symbol:", symbol);
-            require(
-                keccak256(bytes(symbol)) == keccak256(bytes("WETH")) ||
-                    keccak256(bytes(symbol)) == keccak256(bytes("ETH")), // Some networks use "ETH"
-                "Token symbol is not WETH or ETH"
-            );
-            console.log("Symbol validation passed");
-        } catch {
-            revert("Failed to get token symbol");
-        }
-
-        // Check decimals
-        try weth.decimals() returns (uint8 decimals) {
-            console.log("Token decimals:", decimals);
-            require(decimals == 18, "Token decimals is not 18");
-            console.log("Decimals validation passed");
-        } catch {
-            revert("Failed to get token decimals");
-        }
-
-        // Check that WETH contract has substantial ETH backing (at least 1000 ETH)
-        // This verifies it's a real, active WETH contract and not a fake
-        uint256 ethBalance = wethAddr.balance;
-        console.log("WETH contract ETH balance:", ethBalance / 1e18, "ETH");
-        require(ethBalance >= 1000 ether, "WETH contract has less than 1000 ETH - possibly fake or inactive");
-        console.log("WETH contract has sufficient ETH backing (>=1000 ETH)");
-
-        // Additional sanity check - try ERC20 balanceOf call
-        try weth.balanceOf(address(0)) returns (uint256) {
-            // If this call succeeds, it's likely a proper ERC20
-            console.log("ERC20 balanceOf call succeeded");
-        } catch {
-            revert("Failed ERC20 balanceOf call - not a proper ERC20");
-        }
-
-        console.log("WETH address validation completed successfully");
     }
 }
 

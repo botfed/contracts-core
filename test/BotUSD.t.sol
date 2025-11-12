@@ -2,7 +2,7 @@
 pragma solidity ^0.8.24;
 
 import {Test} from "forge-std/Test.sol";
-import {console} from "forge-std/console.sol";
+// import {console} from "forge-std/console.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {BotUSD} from "../src/BotUSD.sol";
@@ -142,6 +142,7 @@ contract BotUSDTest is Test {
             "botUSDC",
             owner,
             address(manager),
+            address(0),
             rewarder
         );
         ERC1967Proxy proxy = new ERC1967Proxy(address(vaultImpl), initData);
@@ -258,7 +259,7 @@ contract BotUSDTest is Test {
         vm.prank(newRisk);
         vm.expectEmit(false, false, false, true);
         emit BotUSD.TVLCapChanged(1234);
-        vault.setTVLCap(1234);
+        vault.setTvlCap(1234);
         assertEq(vault.tvlCap(), 1234);
 
         vm.prank(newRisk);
@@ -323,7 +324,7 @@ contract BotUSDTest is Test {
 
     function test_TVLCap() public {
         vm.prank(owner);
-        vault.setTVLCap(1_000);
+        vault.setTvlCap(1_000);
 
         _approveAndDeposit(user1, 800);
 
@@ -335,7 +336,7 @@ contract BotUSDTest is Test {
 
         // boundary: if cap == totalSupply, maxDeposit == 0
         vm.startPrank(owner);
-        vault.setTVLCap(vault.totalSupply());
+        vault.setTvlCap(vault.totalSupply());
         assertEq(vault.maxDeposit(user1), 0);
         vm.stopPrank();
     }
@@ -364,7 +365,9 @@ contract BotUSDTest is Test {
             "n",
             "s",
             owner,
-            address(m2)
+            address(m2),
+            address(0),
+            address(0)
         );
         BotUSD v = BotUSD(address(new ERC1967Proxy(address(impl), init)));
         m2.setVault(address(v));
@@ -602,17 +605,20 @@ contract BotUSDTest is Test {
         assertEq(vault.balanceOf(rewarder), 0);
     }
     function test_MintReward_Fails_MintTooMuch() public {
-        vm.warp(100 days); // or vm.warp(block.timestamp + 1 days);
+        vm.warp(block.timestamp + 100 days); 
         uint256 amount = 10000e6;
         deal(address(vault.asset()), user1, amount);
         vm.startPrank(user1);
         IERC20(vault.asset()).approve(address(vault), amount);
         vault.deposit(amount, user1);
         vm.stopPrank();
+
         uint256 mintAmount = (amount * vault.MAX_INFLATION_PER_MINT_BIPS() + 10_000) / 10_000;
+
         vm.prank(rewarder);
         vm.expectRevert(BotUSD.MintExceedsLimit.selector);
         vault.mintRewards(amount);
+
         assertEq(vault.balanceOf(rewarder), 0);
     }
     function test_MintReward_Fail_MintTooSoon() public {

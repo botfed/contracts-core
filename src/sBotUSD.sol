@@ -95,18 +95,26 @@ contract sBotUSD is
     /* ---- modifiers --- */
 
     modifier onlyRiskAdminOrOwner() {
-        if (msg.sender != riskAdmin && msg.sender != owner()) revert NotAuth();
+        _onlyRiskAdminOrOwner();
         _;
     }
 
+    function _onlyRiskAdminOrOwner() internal {
+        if (msg.sender != riskAdmin && msg.sender != owner()) revert NotAuth();
+    }
+
     modifier onlyWhitelistedInBase(address user) {
+        _onlyWhitelistedInBase(user);
+        _;
+    }
+
+    function _onlyWhitelistedInBase(address user) internal {
         // asset() returns BotUSD vault address
         IWhitelistable baseVault = IWhitelistable(address(asset()));
 
         if (baseVault.userWhitelistActive() && !baseVault.userWhitelist(user)) {
             revert NotAuth();
         }
-        _;
     }
 
     /*---- role setters ---- */

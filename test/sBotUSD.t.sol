@@ -103,7 +103,7 @@ contract sBotUSDTest is Test {
     address user = address(0xB0B);
     address other = address(0xCAFE);
 
-    function _deploySBotUSD(IERC20 asset, address _silo) internal returns (sBotUSD) {
+    function _deploysBotUSD(IERC20 asset, address _silo) internal returns (sBotUSD) {
         implSBotUSD = new sBotUSD();
         bytes memory initData = abi.encodeWithSelector(
             sBotUSD.initialize.selector,
@@ -128,7 +128,7 @@ contract sBotUSDTest is Test {
         silo = new MockSilo(IERC20(address(baseVault)));
 
         // 4. Deploy sBotUSD staking vault (takes vault shares as asset)
-        stakingVault = _deploySBotUSD(IERC20(address(baseVault)), address(silo));
+        stakingVault = _deploysBotUSD(IERC20(address(baseVault)), address(silo));
 
         // 5. Fund users with USDC
         usdc.mint(user, 1_000_000e6);

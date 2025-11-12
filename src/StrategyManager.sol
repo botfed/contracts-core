@@ -56,13 +56,20 @@ contract StrategyManager is Initializable, UUPSUpgradeable, OwnableUpgradeable, 
     /* Modifiers */
 
     modifier onlyVault() {
-        if (msg.sender != vault) revert OnlyVault();
+        _onlyVault();
         _;
+    }
+    function _onlyVault() internal {
+        if (msg.sender != vault) revert OnlyVault();
     }
 
     modifier onlyExecOrOwner() {
-        if (msg.sender != exec && msg.sender != owner()) revert OnlyExecOrOwner();
+        _onlyExecOrOwner();
         _;
+    }
+
+    function _onlyExecOrOwner() internal {
+        if (msg.sender != exec && msg.sender != owner()) revert OnlyExecOrOwner();
     }
 
     constructor() {

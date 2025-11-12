@@ -93,8 +93,8 @@ contract BotUSD is
 
     /* ========== STATE VARIABLES ========== */
 
-    address public deprecated_withdrawNFT;
-    address public deprecated_fulfiller;
+    address public deprecatedWithdrawNFT;
+    address public deprecatedFulfiller;
 
     /**
      * @notice Risk administrator with emergency powers
@@ -152,7 +152,7 @@ contract BotUSD is
     uint256 public withdrawalFeeBips; // formerly unint256 deprecated_nextReqId
 
     /// @dev Deprecated: Previously used for total requested amount tracking
-    uint256 public deprecated_amtRequested;
+    uint256 public deprecatedAmtRequested;
 
     uint256 public version; // upgrade version counter
 
@@ -287,6 +287,7 @@ contract BotUSD is
         string memory symbol_,
         address initialOwner,
         address manager_,
+        address feeReceiver_,
         address rewarder_
     ) public initializer {
         if (address(asset_) == address(0)) revert ZeroAddress();
@@ -313,8 +314,12 @@ contract BotUSD is
      * @dev Used for risk management functions that need rapid response
      */
     modifier onlyRiskAdminOrOwner() {
-        if (msg.sender != riskAdmin && msg.sender != owner()) revert NotAuth();
+        _onlyRiskAdminOrOwner();
         _;
+    }
+
+    function _onlyRiskAdminOrOwner() internal {
+        if (msg.sender != riskAdmin && msg.sender != owner()) revert NotAuth();
     }
 
     /**
@@ -322,8 +327,12 @@ contract BotUSD is
      * @dev Only RewardSilo can mint inflationary rewards
      */
     modifier onlyRewarder() {
-        if (msg.sender != rewarder) revert NotAuth();
+        _onlyRewarder();
         _;
+    }
+
+    function _onlyRewarder() internal {
+        if (msg.sender != rewarder) revert NotAuth();
     }
 
     /**
@@ -331,8 +340,12 @@ contract BotUSD is
      * @dev Allows permissionless access when whitelist is disabled
      */
     modifier onlyWhitelisted(address receiver) {
-        if (userWhitelistActive && !userWhitelist[receiver]) revert NotAuth();
+        _onlyWhitelisted(receiver);
         _;
+    }
+
+    function _onlyWhitelisted(address receiver) internal {
+        if (userWhitelistActive && !userWhitelist[receiver]) revert NotAuth();
     }
 
     /* ========== ADMIN FUNCTIONS ========== */
@@ -444,7 +457,7 @@ contract BotUSD is
      *
      * @param newCap New maximum total supply
      */
-    function setTVLCap(uint256 newCap) external onlyRiskAdminOrOwner {
+    function setTvlCap(uint256 newCap) external onlyRiskAdminOrOwner {
         tvlCap = newCap;
         emit TVLCapChanged(tvlCap);
     }
@@ -766,14 +779,14 @@ contract BotUSD is
 
     function initializeV1(uint256 _targetAssets) external onlyOwner {
         require(version == 0, "Already initialized");
-        deprecated_withdrawNFT = address(0);
-        deprecated_fulfiller = address(0);
+        deprecatedWithdrawNFT = address(0);
+        deprecatedFulfiller = address(0);
         feeReceiver = address(0);
         rewarder = address(0);
         tvlCap = 1e6 * 10 ** IERC20Metadata(asset()).decimals();
         lastRewardMintTime = block.timestamp;
         withdrawalFeeBips = 0;
-        deprecated_amtRequested = 0;
+        deprecatedAmtRequested = 0;
         version += 1;
         emit VersionUpgraded(version);
     }

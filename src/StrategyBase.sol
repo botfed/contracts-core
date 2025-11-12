@@ -74,22 +74,33 @@ abstract contract StrategyBaseUpgradeable is
         emit ExecutorSet(address(0), executor);
     }
 
-
     /// Modifiers
 
     modifier onlyManagerOrOwner() {
-        if (msg.sender != manager && msg.sender != owner()) revert NotAuth();
+        _onlyManagerOrOwner();
         _;
+    }
+
+    function _onlyManagerOrOwner() internal {
+        if (msg.sender != manager && msg.sender != owner()) revert NotAuth();
     }
 
     modifier onlyExecutorOrOwner() {
-        if (msg.sender != executor && msg.sender != owner()) revert NotAuth();
+        _onlyExecutorOrOwner();
         _;
     }
 
+    function _onlyExecutorOrOwner() internal {
+        if (msg.sender != executor && msg.sender != owner()) revert NotAuth();
+    }
+
     modifier onlyRiskAdminOrOwner() {
-        if (msg.sender != riskAdmin && msg.sender != owner()) revert NotAuth();
+        _onlyRiskAdminOrOwner();
         _;
+    }
+
+    function _onlyRiskAdminOrOwner() internal {
+        if (msg.sender != riskAdmin && msg.sender != owner()) revert NotAuth();
     }
 
     /// Setters

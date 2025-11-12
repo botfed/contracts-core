@@ -160,8 +160,12 @@ contract RewardSilo is
      * @dev Prevents unauthorized withdrawals of dripped rewards
      */
     modifier onlyVault() {
-        if (msg.sender != vault) revert NotAuth();
+        _onlyVault();
         _;
+    }
+
+    function _onlyVault() internal {
+        if (msg.sender != vault) revert NotAuth();
     }
 
     /* ========== CONSTRUCTOR ========== */

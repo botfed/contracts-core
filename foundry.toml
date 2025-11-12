@@ -1,5 +1,10 @@
 
 [profile.default]
+optimizer = true
+optimizer_runs = 200
+via_ir = true              # IR pipeline often shrinks runtime code
+bytecode_hash = "none"     # drops metadata hash (~40–50 bytes)
+cbor_metadata = false      # keep artifacts small; not in runtime, but good hygiene
 chain_id = 8453
 
 src = "src"
