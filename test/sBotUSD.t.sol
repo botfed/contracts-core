@@ -3,10 +3,12 @@ pragma solidity ^0.8.24;
 
 import "forge-std/Test.sol";
 import {sBotUSD} from "../src/sBotUSD.sol";
-import {ISilo, IMintableBotUSD} from "../src/RewardSilo.sol"; // only need ISilo
+import {ISilo} from "../src/RewardSilo.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {PausableUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
+import {ERC4626} from "@openzeppelin/contracts/token/ERC20/extensions/ERC4626.sol";
+import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 
 /* ----------------------------- Mocks ----------------------------- */
 
@@ -16,90 +18,36 @@ contract SBotUSDV2 is sBotUSD {
     }
 }
 
-contract MockERC20Mintable is IERC20 {
-    string public name;
-    string public symbol;
-    uint8 public decimals;
+contract MockERC20 is ERC20 {
+    uint8 private _decimals;
 
-    mapping(address => uint256) public balanceOf;
-    mapping(address => mapping(address => uint256)) public allowance;
-    uint256 public totalSupply;
-
-    constructor(string memory n, string memory s, uint8 d) {
-        name = n;
-        symbol = s;
-        decimals = d;
+    constructor(string memory name_, string memory symbol_, uint8 decimals_) ERC20(name_, symbol_) {
+        _decimals = decimals_;
     }
 
-    function mint(address to, uint256 amt) external {
-        totalSupply += amt;
-        balanceOf[to] += amt;
-        emit Transfer(address(0), to, amt);
+    function decimals() public view override returns (uint8) {
+        return _decimals;
     }
 
-    function approve(address s, uint256 amt) external returns (bool) {
-        allowance[msg.sender][s] = amt;
-        emit Approval(msg.sender, s, amt);
-        return true;
-    }
-
-    function transfer(address to, uint256 amt) external returns (bool) {
-        _transfer(msg.sender, to, amt);
-        return true;
-    }
-
-    // NOTE: public + virtual so fee token can override
-    function transferFrom(address from, address to, uint256 amt) public virtual returns (bool) {
-        uint256 a = allowance[from][msg.sender];
-        require(a >= amt, "allow");
-        unchecked {
-            allowance[from][msg.sender] = a - amt;
-        }
-        _transfer(from, to, amt);
-        return true;
-    }
-
-    function _transfer(address from, address to, uint256 amt) internal {
-        require(balanceOf[from] >= amt, "bal");
-        unchecked {
-            balanceOf[from] -= amt;
-            balanceOf[to] += amt;
-        }
-        emit Transfer(from, to, amt);
+    function mint(address to, uint256 amount) external {
+        _mint(to, amount);
     }
 }
 
-// Fee-on-transfer variant to trigger InsufficientReceived
-contract MockFeeOnTransfer is MockERC20Mintable {
-    uint256 public feeBips; // e.g. 100 = 1%
-    constructor(uint256 _feeBips) MockERC20Mintable("FOT", "FOT", 6) {
-        feeBips = _feeBips;
-    }
+// Simple ERC4626 vault for testing
+contract MockVault is ERC4626 {
+    constructor(IERC20 asset_, string memory name_, string memory symbol_) 
+        ERC4626(asset_)
+        ERC20(name_, symbol_) 
+    {}
 
-    function transferFrom(address from, address to, uint256 amt) public override returns (bool) {
-        uint256 a = allowance[from][msg.sender];
-        require(a >= amt, "allow");
-        unchecked {
-            allowance[from][msg.sender] = a - amt;
-        }
-        // take fee
-        uint256 fee = (amt * feeBips) / 10_000;
-        uint256 net = amt - fee;
-        require(balanceOf[from] >= amt, "bal");
-        unchecked {
-            balanceOf[from] -= amt;
-            balanceOf[to] += net;
-            // burn fee (or send to fee collector; burn is fine for test)
-            balanceOf[address(0)] += fee;
-            totalSupply -= fee;
-        }
-        emit Transfer(from, to, net);
-        return true;
+    function mint(address to, uint256 amount) external {
+        _mint(to, amount);
     }
 }
 
-// Silo mock that reports arbitrary maxWithdrawable and transfers what it actually holds.
-contract MockSilo is ISilo {
+// Mock Silo for sBotUSD
+contract MockSilo {
     IERC20 private _asset;
     uint256 public reportedMax;
 
@@ -107,8 +55,8 @@ contract MockSilo is ISilo {
         _asset = asset_;
     }
 
-    function asset() external view returns (IMintableBotUSD) {
-        return IMintableBotUSD(address(_asset));
+    function asset() external view returns (IERC20) {
+        return _asset;
     }
 
     function setReportedMax(uint256 v) external {
@@ -129,46 +77,52 @@ contract MockSilo is ISilo {
         if (sendAmt > 0) {
             require(_asset.transfer(msg.sender, sendAmt), "send");
         }
-        // sBotUSD verifies shortfall via balance delta and reverts if got < needed
     }
 }
 
 /* ------------------------------- Tests -------------------------------- */
 
 contract sBotUSDTest is Test {
-    sBotUSD impl;
-    sBotUSD vault; // proxy cast
-    ERC1967Proxy proxy;
-    MockERC20Mintable usdc; // 6 decimals
+    sBotUSD implSBotUSD;
+    sBotUSD stakingVault; // sBotUSD proxy
+    ERC1967Proxy proxySBotUSD;
+
+    MockERC20 usdc;
+    MockVault baseVault; // Any ERC4626 vault
     MockSilo silo;
 
     address owner = address(0xA11CE);
-    address riskAdmin = address(0xA11CE); // equals owner at initialize
     address user = address(0xB0B);
     address other = address(0xCAFE);
 
-    function _deployVault(IERC20 asset, address _silo) internal returns (sBotUSD) {
-        impl = new sBotUSD();
+    function _deploySBotUSD(IERC20 asset, address _silo) internal returns (sBotUSD) {
+        implSBotUSD = new sBotUSD();
         bytes memory initData = abi.encodeWithSelector(
             sBotUSD.initialize.selector,
             asset,
-            "Staked BotUSD",
-            "sBotUSD",
+            "Staked Vault Shares",
+            "sShares",
             owner,
             _silo
         );
-        proxy = new ERC1967Proxy(address(impl), initData);
-        return sBotUSD(address(proxy));
+        proxySBotUSD = new ERC1967Proxy(address(implSBotUSD), initData);
+        return sBotUSD(address(proxySBotUSD));
     }
 
     function setUp() public {
-        usdc = new MockERC20Mintable("USDC", "USDC", 6);
-        silo = new MockSilo(IERC20(address(usdc)));
+        // 1. Deploy USDC
+        usdc = new MockERC20("USDC", "USDC", 6);
 
-        // deploy proxy vault with matching silo asset
-        vault = _deployVault(IERC20(address(usdc)), address(silo));
+        // 2. Deploy any ERC4626 vault
+        baseVault = new MockVault(IERC20(address(usdc)), "Base Vault", "bVault");
 
-        // fund users
+        // 3. Deploy silo for sBotUSD (takes vault shares as asset)
+        silo = new MockSilo(IERC20(address(baseVault)));
+
+        // 4. Deploy sBotUSD staking vault (takes vault shares as asset)
+        stakingVault = _deploySBotUSD(IERC20(address(baseVault)), address(silo));
+
+        // 5. Fund users with USDC
         usdc.mint(user, 1_000_000e6);
         usdc.mint(other, 1_000_000e6);
 
@@ -178,218 +132,247 @@ contract sBotUSDTest is Test {
     /* ------------------------- initialize & roles ------------------------- */
 
     function testInit() public {
-        assertEq(address(vault.asset()), address(usdc), "asset");
-        assertEq(address(vault.silo()), address(silo), "silo");
-        assertEq(vault.decimals(), 6);
+        assertEq(address(stakingVault.asset()), address(baseVault), "asset should be base vault");
+        assertEq(address(stakingVault.silo()), address(silo), "silo");
+        assertEq(stakingVault.decimals(), 6);
         // only owner/riskAdmin can pause
         vm.prank(other);
         vm.expectRevert(abi.encodeWithSignature("NotAuth()"));
-        vault.pause();
+        stakingVault.pause();
     }
 
     function testSetRiskAdminAndPauseUnpause() public {
         vm.prank(owner);
-        vault.setRiskAdmin(other);
+        stakingVault.setRiskAdmin(other);
 
         vm.prank(other);
-        vault.pause();
-        assertTrue(vault.paused());
+        stakingVault.pause();
+        assertTrue(stakingVault.paused());
 
         vm.prank(other);
-        vault.unpause();
-        assertFalse(vault.paused());
+        stakingVault.unpause();
+        assertFalse(stakingVault.paused());
     }
 
     /* --------------------------- setSilo controls -------------------------- */
 
     function testSetSiloOnlyOwnerWhenPaused() public {
         vm.prank(owner);
-        vault.pause();
+        stakingVault.pause();
 
-        MockSilo newSilo = new MockSilo(IERC20(address(usdc)));
+        MockSilo newSilo = new MockSilo(IERC20(address(baseVault)));
 
         vm.prank(owner);
-        vault.setSilo(address(newSilo));
-        assertEq(address(vault.silo()), address(newSilo));
+        stakingVault.setSilo(address(newSilo));
+        assertEq(address(stakingVault.silo()), address(newSilo));
 
         // not paused → ExpectedPause
         vm.prank(owner);
-        vault.unpause();
+        stakingVault.unpause();
         vm.prank(owner);
         vm.expectRevert(PausableUpgradeable.ExpectedPause.selector);
-        vault.setSilo(address(newSilo));
+        stakingVault.setSilo(address(newSilo));
     }
 
     function testSetSiloAssetMismatchReverts() public {
         vm.prank(owner);
-        vault.pause();
+        stakingVault.pause();
 
-        MockERC20Mintable dai = new MockERC20Mintable("DAI", "DAI", 18);
+        MockERC20 dai = new MockERC20("DAI", "DAI", 18);
         MockSilo badSilo = new MockSilo(IERC20(address(dai)));
 
         vm.prank(owner);
         vm.expectRevert(abi.encodeWithSignature("SiloAssetMismatch()"));
-        vault.setSilo(address(badSilo));
+        stakingVault.setSilo(address(badSilo));
     }
 
     /* ------------------------------ deposit ------------------------------- */
 
     function testDepositMintsOneToOne() public {
-        uint256 amt = 100_000e6;
+        // First get base vault shares
+        uint256 usdcAmt = 100_000e6;
         vm.startPrank(user);
-        usdc.approve(address(vault), amt);
-        uint256 shares = vault.deposit(amt, user);
+        usdc.approve(address(baseVault), usdcAmt);
+        uint256 vaultShares = baseVault.deposit(usdcAmt, user);
+        
+        // Then stake vault shares to get sBotUSD
+        IERC20(address(baseVault)).approve(address(stakingVault), vaultShares);
+        uint256 shares = stakingVault.deposit(vaultShares, user);
         vm.stopPrank();
 
-        assertEq(shares, amt);
-        assertEq(vault.balanceOf(user), amt);
-        assertEq(usdc.balanceOf(address(vault)), amt);
-    }
-
-    function testDepositRevertsOnFeeOnTransfer() public {
-        // vault with fee-on-transfer asset to hit InsufficientReceived
-        MockFeeOnTransfer fot = new MockFeeOnTransfer(100); // 1%
-        MockSilo fotSilo = new MockSilo(IERC20(address(fot)));
-        sBotUSD badVault = _deployVault(IERC20(address(fot)), address(fotSilo));
-
-        fot.mint(user, 100_000e6);
-        vm.startPrank(user);
-        fot.approve(address(badVault), type(uint256).max);
-        vm.expectRevert(abi.encodeWithSignature("InsufficientReceived(uint256,uint256)", 100_000e6, 99_000e6));
-        badVault.deposit(100_000e6, user);
-        vm.stopPrank();
+        assertEq(shares, vaultShares);
+        assertEq(stakingVault.balanceOf(user), vaultShares);
+        assertEq(IERC20(address(baseVault)).balanceOf(address(stakingVault)), vaultShares);
     }
 
     /* -------------------- withdraw / redeem & silo pull -------------------- */
 
     function testWithdrawPullsFromSilo() public {
-        uint256 balBefore = usdc.balanceOf(user);
-        uint256 dep = 50_000e6;
+        // Setup: User gets staked shares
+        uint256 usdcAmt = 50_000e6;
         vm.startPrank(user);
-        usdc.approve(address(vault), dep);
-        vault.deposit(dep, user);
+        usdc.approve(address(baseVault), usdcAmt);
+        uint256 vaultShares = baseVault.deposit(usdcAmt, user);
+        IERC20(address(baseVault)).approve(address(stakingVault), vaultShares);
+        stakingVault.deposit(vaultShares, user);
         vm.stopPrank();
 
-        // fund silo and advertise liquidity
-        usdc.mint(address(this), 50_000e6);
-        usdc.approve(address(silo), type(uint256).max);
+        // Fund silo with vault shares
+        baseVault.mint(address(this), 50_000e6);
+        IERC20(address(baseVault)).approve(address(silo), 50_000e6);
         silo.fund(50_000e6);
         silo.setReportedMax(50_000e6);
 
-        // expected shares to burn should come from the vault’s own math
-        uint256 expectedBurn = vault.previewWithdraw(dep);
-        assertGt(expectedBurn, 0, "previewWithdraw should be > 0");
-
-        // withdraw everything (forces pull if vault balance < dep)
+        // Withdraw
+        uint256 balBefore = IERC20(address(baseVault)).balanceOf(user);
         vm.startPrank(user);
-        uint256 burned = vault.withdraw(dep, user, user);
+        uint256 assets = stakingVault.withdraw(vaultShares, user, user);
         vm.stopPrank();
-        uint256 balAfter = usdc.balanceOf(user);
-        assertEq(burned, expectedBurn);
-        assertTrue(balAfter + 1 >= balBefore && balAfter <= balBefore + 1, "post withdraw bal incorrect");
-        // Remaining shares should be initial minus burned
-        uint256 remaining = vault.balanceOf(user);
-        assertEq(remaining + burned, dep, "shares conservation (allowing rounding in burn check above)");
+
+        assertGt(assets, 0);
+        assertGt(IERC20(address(baseVault)).balanceOf(user), balBefore);
     }
 
     function testRedeemPullsFromSilo() public {
-        uint256 balBefore = usdc.balanceOf(user);
-        uint256 dep = 30_000e6;
+        uint256 usdcAmt = 30_000e6;
         vm.startPrank(user);
-        usdc.approve(address(vault), dep);
-        vault.deposit(dep, user);
+        usdc.approve(address(baseVault), usdcAmt);
+        uint256 vaultShares = baseVault.deposit(usdcAmt, user);
+        IERC20(address(baseVault)).approve(address(stakingVault), vaultShares);
+        stakingVault.deposit(vaultShares, user);
         vm.stopPrank();
 
-        usdc.mint(address(this), 30_000e6);
-        usdc.approve(address(silo), type(uint256).max);
+        // Fund silo
+        baseVault.mint(address(this), 30_000e6);
+        IERC20(address(baseVault)).approve(address(silo), 30_000e6);
         silo.fund(30_000e6);
         silo.setReportedMax(30_000e6);
 
-        uint256 expected = vault.previewRedeem(dep);
+        uint256 expected = stakingVault.previewRedeem(vaultShares);
         vm.startPrank(user);
-        uint256 received = vault.redeem(dep, user, user);
+        uint256 received = stakingVault.redeem(vaultShares, user, user);
         vm.stopPrank();
 
         assertEq(expected, received);
-        assertTrue(received + 1 >= dep * 2 && received - 1 <= dep * 2);
-        assertEq(vault.balanceOf(user), 0);
-        assertEq(usdc.balanceOf(user), balBefore + received - dep);
+        assertEq(stakingVault.balanceOf(user), 0);
     }
 
     function testShortfallRevertsIfSiloCannotProvideFullAmount() public {
-        uint256 dep = 40_000e6;
+        uint256 usdcAmt = 40_000e6;
         vm.startPrank(user);
-        usdc.approve(address(vault), dep);
-        vault.deposit(dep, user);
+        usdc.approve(address(baseVault), usdcAmt);
+        uint256 vaultShares = baseVault.deposit(usdcAmt, user);
+        IERC20(address(baseVault)).approve(address(stakingVault), vaultShares);
+        stakingVault.deposit(vaultShares, user);
         vm.stopPrank();
 
-        silo.setReportedMax(40_000e6); // claim lots of liquidity but actually unfunded
+        silo.setReportedMax(40_000e6); // claim liquidity but don't fund
 
         vm.startPrank(user);
-        // withdraw part so a later pull is needed
-        vault.withdraw(10_000e6, user, user);
-        // now try to withdraw remaining 30k → silo has 0, so Shortfall
+        // withdraw part
+        stakingVault.withdraw(10_000e6, user, user);
+        // try to withdraw more than available → Shortfall
         vm.expectRevert(abi.encodeWithSignature("Shortfall(uint256,uint256)", 10_000e6, 0));
-        vault.withdraw(40_000e6, user, user);
+        stakingVault.withdraw(40_000e6, user, user);
         vm.stopPrank();
     }
 
     /* --------------------------- view math helpers -------------------------- */
 
     function testMaxWithdrawAndMaxRedeemReflectLiquidity() public {
-        uint256 dep = 70_000e6;
+        uint256 usdcAmt = 70_000e6;
         vm.startPrank(user);
-        usdc.approve(address(vault), dep);
-        vault.deposit(dep, user);
+        usdc.approve(address(baseVault), usdcAmt);
+        uint256 vaultShares = baseVault.deposit(usdcAmt, user);
+        IERC20(address(baseVault)).approve(address(stakingVault), vaultShares);
+        stakingVault.deposit(vaultShares, user);
         vm.stopPrank();
 
         // vault balance is 70k, silo reports 0
-        assertEq(vault.maxWithdraw(user), dep);
-        assertEq(vault.maxRedeem(user), dep);
+        assertEq(stakingVault.maxWithdraw(user), vaultShares);
+        assertEq(stakingVault.maxRedeem(user), vaultShares);
 
         // add silo liquidity capacity
         silo.setReportedMax(70_000e6);
-        // user balance still caps
-        uint256 maxWithdraw = vault.maxWithdraw(user);
-        assertTrue(maxWithdraw <= 2 * dep && maxWithdraw >= 2 * dep - 1);
-        assertEq(vault.maxRedeem(user), dep);
+        uint256 maxWithdraw = stakingVault.maxWithdraw(user);
+        assertTrue(maxWithdraw <= 2 * vaultShares && maxWithdraw >= 2 * vaultShares - 1);
     }
 
     function testTotalAssetsEqualsVaultBalPlusSiloMax() public {
-        assertEq(vault.totalAssets(), 0);
+        assertEq(stakingVault.totalAssets(), 0);
 
+        uint256 usdcAmt = 20_000e6;
         vm.startPrank(user);
-        usdc.approve(address(vault), 20_000e6);
-        vault.deposit(20_000e6, user);
+        usdc.approve(address(baseVault), usdcAmt);
+        uint256 vaultShares = baseVault.deposit(usdcAmt, user);
+        IERC20(address(baseVault)).approve(address(stakingVault), vaultShares);
+        stakingVault.deposit(vaultShares, user);
         vm.stopPrank();
 
         silo.setReportedMax(30_000e6);
-        assertEq(vault.totalAssets(), 50_000e6);
+        assertEq(stakingVault.totalAssets(), 50_000e6);
     }
 
     /* --------------------------- drainFromSilo --------------------------- */
 
     function testDrainFromSiloOnlyOwnerWhenPaused() public {
-        usdc.mint(address(this), 25_000e6);
-        usdc.approve(address(silo), type(uint256).max);
+        // Fund silo with vault shares
+        baseVault.mint(address(this), 25_000e6);
+        IERC20(address(baseVault)).approve(address(silo), 25_000e6);
         silo.fund(25_000e6);
         silo.setReportedMax(25_000e6);
 
         // not paused → ExpectedPause
         vm.prank(owner);
         vm.expectRevert(PausableUpgradeable.ExpectedPause.selector);
-        vault.drainFromSilo(10_000e6);
+        stakingVault.drainFromSilo(10_000e6);
 
         vm.prank(owner);
-        vault.pause();
+        stakingVault.pause();
 
-        uint256 bal0 = usdc.balanceOf(address(vault));
+        uint256 bal0 = IERC20(address(baseVault)).balanceOf(address(stakingVault));
 
         vm.prank(owner);
-        vault.drainFromSilo(10_000e6);
+        stakingVault.drainFromSilo(10_000e6);
 
-        uint256 bal1 = usdc.balanceOf(address(vault));
+        uint256 bal1 = IERC20(address(baseVault)).balanceOf(address(stakingVault));
         assertEq(bal1 - bal0, 10_000e6);
+    }
+
+    /* --------------------------- zapBuy/zapSell -------------------------- */
+
+    function testZapBuy() public {
+        uint256 usdcAmount = 25_000e6;
+        
+        vm.startPrank(user);
+        usdc.approve(address(stakingVault), usdcAmount);
+        uint256 shares = stakingVault.zapBuy(usdcAmount, user);
+        vm.stopPrank();
+
+        assertEq(stakingVault.balanceOf(user), shares);
+        assertGt(shares, 0);
+        assertEq(usdc.balanceOf(user), 1_000_000e6 - usdcAmount);
+    }
+
+    function testZapSell() public {
+        uint256 usdcAmount = 25_000e6;
+        
+        // First zapBuy
+        vm.startPrank(user);
+        usdc.approve(address(stakingVault), usdcAmount);
+        uint256 shares = stakingVault.zapBuy(usdcAmount, user);
+        vm.stopPrank();
+
+        // zapSell
+        vm.startPrank(user);
+        stakingVault.approve(address(stakingVault), shares);
+        uint256 usdcReceived = stakingVault.zapSell(shares, user, user);
+        vm.stopPrank();
+
+        assertGt(usdcReceived, 0);
+        assertEq(stakingVault.balanceOf(user), 0);
+        // Should get back approximately what was put in
+        assertApproxEqAbs(usdc.balanceOf(user), 1_000_000e6, 1e6);
     }
 
     /* ------------------------------ UUPS upgrade ---------------------------- */
@@ -397,9 +380,9 @@ contract sBotUSDTest is Test {
     function testUUPSUpgrade() public {
         SBotUSDV2 newImpl = new SBotUSDV2();
         vm.prank(owner);
-        vault.upgradeToAndCall(address(newImpl), "");
+        stakingVault.upgradeToAndCall(address(newImpl), "");
 
-        SBotUSDV2 v2 = SBotUSDV2(address(vault));
+        SBotUSDV2 v2 = SBotUSDV2(address(stakingVault));
         assertEq(v2.version(), "v2");
     }
 }

@@ -31,11 +31,18 @@ contract sBotUSD is
     address public riskAdmin;
     ISilo public silo;
 
-    /* -- Strategy functions --- */
     event SiloSet(address indexed old, address indexed newAddr);
     event RiskAdminSet(address indexed old, address indexed newAddr);
     event PullFromSilo(uint256 requested, uint256 got);
     event SiloDrained(uint256 amount);
+    event ZapBuy(address indexed caller, address indexed receiver, uint256 usdcIn, uint256 sharesOut);
+    event ZapSell(
+        address indexed caller,
+        address indexed receiver,
+        address indexed owner,
+        uint256 sharesIn,
+        uint256 usdcOut
+    );
 
     /* ---------- errors ---------- */
     error Disabled();
@@ -114,6 +121,59 @@ contract sBotUSD is
     function unpause() external onlyRiskAdminOrOwner {
         _unpause();
     }
+    /* ------ Convenience zaps --------*/
+    // In StakingVault contract
+
+    /**
+     * @notice Buy sBotUSD with USDC in one transaction
+     * @dev Zaps: USDC → BotUSD → sBotUSD
+     * @param usdcAmount Amount of USDC to spend
+     * @param receiver Address to receive sBotUSD
+     * @return shares Amount of sBotUSD received
+     */
+    function zapBuy(uint256 usdcAmount, address receiver) external whenNotPaused nonReentrant returns (uint256 shares) {
+        IERC20 usdc = IERC20(ERC4626Upgradeable(asset()).asset());
+
+        // 1. Take USDC from user
+        usdc.safeTransferFrom(msg.sender, address(this), usdcAmount);
+
+        // 2. Deposit to base vault (this contract receives base vault shares)
+        usdc.forceApprove(asset(), usdcAmount);
+        uint256 baseShares = ERC4626Upgradeable(asset()).deposit(usdcAmount, address(this));
+
+        // 3. Mint sBotUSD shares to receiver (assets already held by this contract)
+        uint256 maxAssets = maxDeposit(receiver);
+        if (baseShares > maxAssets) revert ERC4626ExceededMaxDeposit(receiver, baseShares, maxAssets);
+
+        shares = previewDeposit(baseShares);
+        _mint(receiver, shares);
+
+        emit Deposit(address(this), receiver, baseShares, shares);
+        emit ZapBuy(msg.sender, receiver, usdcAmount, shares);
+    }
+
+    /**
+     * @notice Sell sBotUSD for USDC in one transaction
+     * @dev Zaps: sBotUSD → BotUSD → USDC
+     * @param sBotUsdShares Amount of sBotUSD to sell
+     * @param receiver Address to receive USDC
+     * @param owner Owner of sBotUSD being redeemed
+     * @return usdcAmount Amount of USDC received (after withdrawal fee)
+     */
+    function zapSell(
+        uint256 sBotUsdShares,
+        address receiver,
+        address owner
+    ) external whenNotPaused nonReentrant returns (uint256 usdcAmount) {
+        // 1. Redeem sBotUSD for BotUSD
+        uint256 botUsdAmount = _redeemInternal(sBotUsdShares, address(this), owner);
+
+        // 2. Redeem BotUSD for USDC (this handles withdrawal fee)
+        IERC20(asset()).forceApprove(asset(), botUsdAmount);
+        usdcAmount = ERC4626Upgradeable(asset()).redeem(botUsdAmount, receiver, address(this));
+
+        emit ZapSell(msg.sender, receiver, owner, sBotUsdShares, usdcAmount);
+    }
 
     /* ------------------------ ERC-4626 external functions ---------------------- */
 
@@ -121,6 +181,10 @@ contract sBotUSD is
         uint256 assets,
         address receiver
     ) public override whenNotPaused nonReentrant returns (uint256 shares) {
+        return _depositInternal(assets, receiver);
+    }
+
+    function _depositInternal(uint256 assets, address receiver) internal whenNotPaused returns (uint256 shares) {
         uint256 maxAssets = maxDeposit(receiver);
         if (assets > maxAssets) revert ERC4626ExceededMaxDeposit(receiver, assets, maxAssets);
         shares = previewDeposit(assets);
@@ -129,7 +193,6 @@ contract sBotUSD is
         uint256 received = IERC20(asset()).balanceOf(address(this)) - bal0;
         if (received < assets) revert InsufficientReceived(assets, received);
         _mint(receiver, shares);
-        emit Deposit(msg.sender, receiver, assets, shares);
     }
 
     function maxDeposit(address account) public view override returns (uint256) {
@@ -150,6 +213,9 @@ contract sBotUSD is
         address receiver,
         address owner_
     ) public override whenNotPaused nonReentrant returns (uint256 assets) {
+        _redeemInternal(shares, receiver, owner_);
+    }
+    function _redeemInternal(uint256 shares, address receiver, address owner_) internal returns (uint256 assets) {
         uint256 maxShares = maxRedeem(owner_);
         if (shares > maxShares) revert ERC4626ExceededMaxRedeem(owner_, shares, maxShares);
         assets = previewRedeem(shares);
