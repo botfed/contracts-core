@@ -273,6 +273,31 @@ contract sBotUSDTest is Test {
         assertEq(shares, stakingShares);
     }
 
+    function testWithdraw_Whitelisted() public {
+        // Setup: User gets staked shares
+        uint256 usdcAmt = 50_000e6;
+        vm.startPrank(user);
+        usdc.approve(address(baseVault), usdcAmt);
+        uint256 vaultShares = baseVault.deposit(usdcAmt, user);
+        IERC20(address(baseVault)).approve(address(stakingVault), vaultShares);
+        uint256 stakingShares = stakingVault.deposit(vaultShares, user);
+        vm.stopPrank();
+        assertEq(usdcAmt, vaultShares);
+
+        address otherUser = makeAddr("0xEEBB");
+        baseVault.setWhitelistActive(true);
+        baseVault.setUserWhitelisted(user, true);
+
+        // Withdraw
+        uint256 balBefore = IERC20(address(baseVault)).balanceOf(user);
+        vm.startPrank(user);
+        uint256 shares = stakingVault.withdraw(vaultShares, otherUser, user);
+        vm.stopPrank();
+
+        assertEq(shares, stakingShares);
+        assertEq(baseVault.balanceOf(otherUser), vaultShares);
+    }
+
     function testWithdraw_RevertsWhitelist() public {
         // Setup: User gets staked shares
         uint256 usdcAmt = 50_000e6;
@@ -297,6 +322,31 @@ contract sBotUSDTest is Test {
     }
 
     function testRedeem() public {
+        // Setup: User gets staked shares
+        uint256 usdcAmt = 50_000e6;
+        vm.startPrank(user);
+        usdc.approve(address(baseVault), usdcAmt);
+        uint256 vaultShares = baseVault.deposit(usdcAmt, user);
+        IERC20(address(baseVault)).approve(address(stakingVault), vaultShares);
+        uint256 stakingShares = stakingVault.deposit(vaultShares, user);
+        vm.stopPrank();
+        assertEq(usdcAmt, vaultShares);
+
+        address otherUser = makeAddr("0xEEBB");
+        baseVault.setWhitelistActive(true);
+        baseVault.setUserWhitelisted(user, true);
+
+        // Withdraw
+        uint256 balBefore = IERC20(address(baseVault)).balanceOf(user);
+        vm.startPrank(user);
+        uint256 assets = stakingVault.redeem(stakingShares, otherUser, user);
+        vm.stopPrank();
+
+        assertEq(assets, vaultShares);
+        assertEq(baseVault.balanceOf(otherUser), vaultShares);
+    }
+
+    function testRedeem_Whitelisted() public {
         // Setup: User gets staked shares
         uint256 usdcAmt = 50_000e6;
         vm.startPrank(user);
