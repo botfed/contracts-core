@@ -112,6 +112,9 @@ contract RewardSiloTest is Test {
         );
         proxy = new ERC1967Proxy(address(impl), initData);
         silo = RewardSilo(address(proxy));
+        vm.prank(owner);
+        silo.setDripDuration(WEEK);
+        assertEq(silo.dripDuration(), WEEK);
 
         // allow proxy (silo) to call token.mintRewards
         token.setRewarder(address(silo));
@@ -205,6 +208,7 @@ contract RewardSiloTest is Test {
 
         vm.warp(block.timestamp + WEEK / 2);
         uint256 available = silo.maxWithdrawable();
+        console.log(amt, available, silo.asset().balanceOf(address(silo)));
         _approxEq(available, amt / 2, 1);
 
         // non-vault cannot withdraw

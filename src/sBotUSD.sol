@@ -227,12 +227,12 @@ contract sBotUSD is
         emit Deposit(msg.sender, receiver, assets, shares);
     }
 
-    function maxDeposit(address account) public view override returns (uint256) {
+    function maxDeposit(address) public view override returns (uint256) {
         if (paused()) return 0;
         return type(uint256).max;
     }
 
-    function mint(uint256 shares, address receiver) public pure override returns (uint256) {
+    function mint(uint256, address) public pure override returns (uint256) {
         revert Disabled();
     }
 

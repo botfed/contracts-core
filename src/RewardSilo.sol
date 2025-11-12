@@ -62,7 +62,7 @@ interface ISilo {
  *
  * Key features:
  * - Receives BotUSD minted as inflationary rewards
- * - Releases rewards linearly over DRIP_DURATION_SECONDS (1 week)
+ * - Releases rewards linearly over dripDuration
  * - Only the StakingVault can withdraw dripped rewards
  * - Owner can mint new reward batches (subject to BotUSD's own limits)
  * - Pausable for emergency situations
@@ -87,8 +87,9 @@ contract RewardSilo is
     /* ========== CONSTANTS ========== */
 
     /// @notice Duration over which rewards are dripped linearly (1 week)
-    uint256 public constant DRIP_DURATION_SECONDS = 7 * 24 * 60 * 60;
-    uint256 public constant MAX_PERFORMANCE_FEE_BIPS = 5000; // 50%;
+    uint256 public constant MIN_DRIP_DURATION = 8 hours;
+    uint256 public constant MAX_DRIP_DURATION = 90 days;
+    uint256 public constant MAX_PERFORMANCE_FEE_BIPS = 8000; // 80%;
 
     /* ========== STATE VARIABLES ========== */
 
@@ -109,6 +110,7 @@ contract RewardSilo is
     uint256 public lastMintTime;
     uint256 public lastUndripped;
     uint256 public performanceFee;
+    uint256 public dripDuration;
 
     /* ========== EVENTS ========== */
 
@@ -134,6 +136,7 @@ contract RewardSilo is
     event FeeChanged(uint256 oldVal, uint256 newVal);
     event FeeReceiverSet(address indexed oldReceiver, address indexed newReceiver);
     event PerformanceFeePaid(uint256 amount, address indexed receiver);
+    event DripDurationChanged(uint256 oldVal, uint256 newVal);
 
     /* ========== ERRORS ========== */
 
@@ -148,6 +151,7 @@ contract RewardSilo is
 
     error FeeTooHigh();
     error MintMismatch(uint256 expected, uint256 received);
+    error InvalidDripDuration();
 
     /* ========== MODIFIERS ========== */
 
@@ -194,6 +198,7 @@ contract RewardSilo is
         feeReceiver = feeReceiver_;
         performanceFee = initFee;
         lastMintTime = block.timestamp;
+        dripDuration = 7 days;
 
         __Pausable_init();
         __Ownable_init(initialOwner);
@@ -243,6 +248,12 @@ contract RewardSilo is
         performanceFee = newVal;
     }
 
+    function setDripDuration(uint256 newVal) external onlyOwner {
+        if (newVal > MAX_DRIP_DURATION || newVal < MIN_DRIP_DURATION) revert InvalidDripDuration();
+        emit DripDurationChanged(dripDuration, newVal);
+        dripDuration = newVal;
+    }
+
     /* ========== REWARD FUNCTIONS ========== */
 
     /**
@@ -253,7 +264,7 @@ contract RewardSilo is
      * 1. Syncs accumulated to current maxWithdrawable() to preserve undripped rewards
      * 2. Resets drip timer to current timestamp
      * 3. Mints new BotUSD to this contract (subject to BotUSD's own limits)
-     * 4. New rewards drip linearly over DRIP_DURATION_SECONDS
+     * 4. New rewards drip linearly over dripDuration
      *
      * @param amount Amount of BotUSD to mint and begin dripping
      *
@@ -285,11 +296,8 @@ contract RewardSilo is
             // if no receiver, fee is effectively 0 for this mint
             fee = 0;
         }
-
-        // Set new epoch baseline from actual post-mint, post-fee balance
         lastUndripped = asset.balanceOf(address(this)) - accumulated;
         lastMintTime = block.timestamp;
-
         emit Minted(amount, block.timestamp);
     }
 
@@ -299,12 +307,12 @@ contract RewardSilo is
         uint256 elapsed = block.timestamp - lastMintTime;
         uint256 newlyDripped;
 
-        if (elapsed >= DRIP_DURATION_SECONDS) {
+        if (elapsed >= dripDuration) {
             // Full drip period has passed, all rewards available
             newlyDripped = lastUndripped;
         } else {
             // Linear interpolation: (amount * time_passed) / total_time
-            newlyDripped = (lastUndripped * elapsed) / DRIP_DURATION_SECONDS;
+            newlyDripped = (lastUndripped * elapsed) / dripDuration;
         }
         uint256 bal = asset.balanceOf(address(this));
         uint256 dripped = accumulated + newlyDripped;

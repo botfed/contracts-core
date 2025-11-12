@@ -265,7 +265,6 @@ contract sBotUSDTest is Test {
         assertEq(usdcAmt, vaultShares);
 
         // Withdraw
-        uint256 balBefore = IERC20(address(baseVault)).balanceOf(user);
         vm.startPrank(user);
         uint256 shares = stakingVault.withdraw(vaultShares, user, user);
         vm.stopPrank();
@@ -289,7 +288,6 @@ contract sBotUSDTest is Test {
         baseVault.setUserWhitelisted(user, true);
 
         // Withdraw
-        uint256 balBefore = IERC20(address(baseVault)).balanceOf(user);
         vm.startPrank(user);
         uint256 shares = stakingVault.withdraw(vaultShares, otherUser, user);
         vm.stopPrank();
@@ -305,14 +303,13 @@ contract sBotUSDTest is Test {
         usdc.approve(address(baseVault), usdcAmt);
         uint256 vaultShares = baseVault.deposit(usdcAmt, user);
         IERC20(address(baseVault)).approve(address(stakingVault), vaultShares);
-        uint256 stakingShares = stakingVault.deposit(vaultShares, user);
+        stakingVault.deposit(vaultShares, user);
         vm.stopPrank();
         assertEq(usdcAmt, vaultShares);
 
         baseVault.setWhitelistActive(true);
 
         // Withdraw
-        uint256 balBefore = IERC20(address(baseVault)).balanceOf(user);
         vm.startPrank(user);
         vm.expectRevert(sBotUSD.NotAuth.selector);
         uint256 shares = stakingVault.withdraw(vaultShares, user, user);
@@ -337,7 +334,6 @@ contract sBotUSDTest is Test {
         baseVault.setUserWhitelisted(user, true);
 
         // Withdraw
-        uint256 balBefore = IERC20(address(baseVault)).balanceOf(user);
         vm.startPrank(user);
         uint256 assets = stakingVault.redeem(stakingShares, otherUser, user);
         vm.stopPrank();
@@ -358,7 +354,6 @@ contract sBotUSDTest is Test {
         assertEq(usdcAmt, vaultShares);
 
         // Withdraw
-        uint256 balBefore = IERC20(address(baseVault)).balanceOf(user);
         vm.startPrank(user);
         uint256 assets = stakingVault.redeem(stakingShares, user, user);
         vm.stopPrank();
@@ -380,7 +375,6 @@ contract sBotUSDTest is Test {
         baseVault.setWhitelistActive(true);
 
         // Withdraw
-        uint256 balBefore = IERC20(address(baseVault)).balanceOf(user);
         vm.startPrank(user);
         vm.expectRevert(sBotUSD.NotAuth.selector);
         uint256 assets = stakingVault.redeem(stakingShares, user, user);
@@ -570,6 +564,7 @@ contract sBotUSDTest is Test {
         vm.stopPrank();
 
         assertEq(stakingVault.balanceOf(user), 0);
+        assertEq(shares, 0);
     }
 
     function testZapBuy_FailWhitelist_OneWhitelisted() public {
@@ -585,6 +580,7 @@ contract sBotUSDTest is Test {
         vm.stopPrank();
 
         assertEq(stakingVault.balanceOf(user), 0);
+        assertEq(shares, 0);
     }
 
     function testZapBuy_WithWhitelist() public {
