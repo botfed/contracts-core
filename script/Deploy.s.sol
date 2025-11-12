@@ -29,7 +29,6 @@ contract DeployScript is Script {
         address exec; // Executor address
         address riskAdmin; // riskAdmin address for vault
         address minter;
-        address rewarder;
         string vaultName; // Vault token name
         string vaultSymbol; // Vault token symbol
     }
@@ -81,8 +80,7 @@ contract DeployScript is Script {
                 config.vaultName,
                 config.vaultSymbol,
                 config.owner,
-                address(strategyManagerProxy),
-                address(0)
+                address(strategyManagerProxy)
             )
         );
 
@@ -141,7 +139,6 @@ contract DeployScript is Script {
         address treasury = vm.envAddress("BF_TREASURY");
         address riskAdmin = vm.envAddress("BF_RISK_ADMIN");
         address minter = vm.envAddress("BF_MINTER");
-        address rewarder = vm.envAddress("BF_REWARDER");
         address exec = vm.envAddress("BF_STRAT_MANAGER_EXEC");
         address asset = vm.envAddress("ASSET");
 
@@ -158,7 +155,6 @@ contract DeployScript is Script {
                 exec: exec,
                 riskAdmin: riskAdmin,
                 minter: minter,
-                rewarder: rewarder,
                 vaultName: vaultName,
                 vaultSymbol: vaultSymbol
             });

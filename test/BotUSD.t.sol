@@ -120,8 +120,9 @@ contract BotUSDTest is Test {
     MockStrategyManager public manager;
 
     address public owner = makeAddr("owner");
-    address public rewarder = makeAddr("rewarder");
     address public feeReceiver = makeAddr("feeRec");
+    address public oracle = makeAddr("oracle");
+
     address public user1 = makeAddr("user1");
     address public user2 = makeAddr("user2");
     address public rando = makeAddr("rando");
@@ -141,8 +142,7 @@ contract BotUSDTest is Test {
             "BotFed USDC Vault",
             "botUSDC",
             owner,
-            address(manager),
-            rewarder
+            address(manager)
         );
         ERC1967Proxy proxy = new ERC1967Proxy(address(vaultImpl), initData);
         vault = BotUSD(payable(address(proxy)));
@@ -154,12 +154,12 @@ contract BotUSDTest is Test {
         vault.setUserWhitelist(user1, true);
         vault.setUserWhitelist(user2, true);
         vault.setFeeReceiver(feeReceiver);
+        vault.setOracle(oracle);
         vm.stopPrank();
 
         // Seed balances
         asset.mint(user1, INITIAL_TOKENS);
         asset.mint(user2, INITIAL_TOKENS);
-        asset.mint(address(manager), INITIAL_TOKENS);
     }
 
     /* ── Initialization & Admin ─────────────────────────────────────────────── */
@@ -169,13 +169,13 @@ contract BotUSDTest is Test {
         assertEq(vault.name(), "BotFed USDC Vault");
         assertEq(vault.symbol(), "botUSDC");
         assertEq(vault.owner(), owner);
+        assertEq(vault.oracle(), oracle);
         assertEq(address(vault.manager()), address(manager));
         assertFalse(vault.paused());
         assertEq(vault.decimals(), 6);
         // defaults
         assertTrue(vault.userWhitelistActive());
         assertEq(vault.tvlCap(), type(uint256).max);
-        assertTrue(vault.rewarder() == rewarder);
     }
 
     function test_Pause_Unpause_Access() public {
@@ -288,7 +288,7 @@ contract BotUSDTest is Test {
         assertEq(vault.totalAssets(), amount);
 
         // funds forwarded to manager
-        assertEq(asset.balanceOf(address(manager)), INITIAL_TOKENS + amount);
+        assertEq(asset.balanceOf(address(manager)), amount);
         assertEq(asset.balanceOf(address(vault)), 0);
     }
 
@@ -576,73 +576,6 @@ contract BotUSDTest is Test {
         assertEq(vault.totalSupply(), 0);
     }
 
-    function test_MintReward() public {
-        vm.warp(100 days); // or vm.warp(block.timestamp + 1 days);
-        uint256 amount = 1000e6;
-        deal(address(vault.asset()), user1, 100 * amount);
-        vm.startPrank(user1);
-        IERC20(vault.asset()).approve(address(vault), 100 * amount);
-        vault.deposit(100 * amount, user1);
-        vm.stopPrank();
-        vm.prank(rewarder);
-        vault.mintRewards(amount);
-        assertEq(vault.balanceOf(rewarder), amount);
-    }
-    function test_MintReward_Fail_NotAuth() public {
-        vm.warp(100 days); // or vm.warp(block.timestamp + 1 days);
-        uint256 amount = 1000e6;
-        deal(address(vault.asset()), user1, 100 * amount);
-        vm.startPrank(user1);
-        IERC20(vault.asset()).approve(address(vault), 100 * amount);
-        vault.deposit(100 * amount, user1);
-        vm.stopPrank();
-        vm.prank(rando);
-        vm.expectRevert(BotUSD.NotAuth.selector);
-        vault.mintRewards(amount);
-        assertEq(vault.balanceOf(rewarder), 0);
-    }
-    function test_MintReward_Fails_MintTooMuch() public {
-        vm.warp(100 days); // or vm.warp(block.timestamp + 1 days);
-        uint256 amount = 10000e6;
-        deal(address(vault.asset()), user1, amount);
-        vm.startPrank(user1);
-        IERC20(vault.asset()).approve(address(vault), amount);
-        vault.deposit(amount, user1);
-        vm.stopPrank();
-        uint256 mintAmount = (amount * vault.MAX_INFLATION_PER_MINT_BIPS() + 10_000) / 10_000;
-        vm.prank(rewarder);
-        vm.expectRevert(BotUSD.MintExceedsLimit.selector);
-        vault.mintRewards(amount);
-        assertEq(vault.balanceOf(rewarder), 0);
-    }
-    function test_MintReward_Fail_MintTooSoon() public {
-        uint256 amount = 1000e6;
-        deal(address(vault.asset()), user1, 100 * amount);
-        vm.startPrank(user1);
-        IERC20(vault.asset()).approve(address(vault), 100 * amount);
-        vault.deposit(100 * amount, user1);
-        vm.stopPrank();
-        vm.prank(rewarder);
-        vm.expectRevert(BotUSD.MintTooSoon.selector);
-        vault.mintRewards(amount);
-        assertEq(vault.balanceOf(rewarder), 0);
-    }
-
-    function test_SetRewarder() public {
-        address newR = makeAddr("newR");
-        vm.startPrank(owner);
-        vm.expectEmit(true, true, true, true);
-        emit BotUSD.RewarderSet(vault.rewarder(), newR);
-        vault.setRewarder(newR);
-        vm.stopPrank();
-    }
-    function test_SetRewarder_NotAuth() public {
-        address newR = makeAddr("newR");
-        vm.startPrank(rando);
-        vm.expectRevert();
-        vault.setRewarder(newR);
-        vm.stopPrank();
-    }
     function test_SetWithdrawalFee() public {
         uint256 newFee = 25;
         vm.startPrank(owner);
@@ -668,11 +601,17 @@ contract BotUSDTest is Test {
     function test_Redeem_WithFee() public {
         uint256 amount = 1000e6;
         deal(address(vault.asset()), user1, amount);
+
+        // User deposits to vault
         vm.startPrank(user1);
         IERC20(vault.asset()).approve(address(vault), amount);
         vault.deposit(amount, user1);
         vm.stopPrank();
+
+        // test that their balancer is 1:1
         assertEq(vault.balanceOf(user1), amount);
+
+        // we set a withdraw fee
         vm.prank(owner);
         vault.setWithdrawalFee(50);
 
@@ -682,7 +621,57 @@ contract BotUSDTest is Test {
         uint256 received = vault.redeem(amount, user1, user1);
         vm.stopPrank();
         assertEq(expected, received);
+        console.log(vault.totalAssets(), received, amount);
         uint256 expectedFee = (amount * 50) / 10_000;
         assertTrue(expected <= amount - expectedFee && expected >= amount - expectedFee - 1);
+    }
+
+    function test_OracleUpdate() public {
+        IERC20 asset_ = IERC20(vault.asset());
+
+        uint256 amount = 100e6;
+
+        deal(address(asset_), user1, amount);
+
+        // User deposits to vault
+        vm.startPrank(user1);
+        IERC20(vault.asset()).approve(address(vault), amount);
+        vault.deposit(amount, user1);
+        vm.stopPrank();
+
+        // test that their balancer is 1:1
+        assertEq(vault.balanceOf(user1), amount);
+
+        // we set a withdraw fee
+        vm.prank(oracle);
+        vault.updateTargetAssets(amount, amount * 2);
+        deal(address(vault.asset()), address(vault), amount);
+        vm.warp(block.timestamp + vault.dripDuration() + 1);
+
+        // preview redeem for users shares
+        uint256 expected;
+        uint256 received;
+
+        expected = vault.previewRedeem(amount);
+        vm.startPrank(user1);
+        vault.approve(address(vault), amount);
+        vm.expectRevert();
+        received = vault.redeem(amount, user1, user1);
+        vm.stopPrank();
+
+        vm.prank(oracle);
+        vault.updateTargetAssets(2 * amount, amount * 2);
+
+        expected = vault.previewRedeem(amount);
+        vm.startPrank(user1);
+        vault.approve(address(vault), amount);
+        received = vault.redeem(amount, user1, user1);
+        vm.stopPrank();
+
+        assertEq(expected, received);
+
+        console.log(vault.totalAssets(), received, amount);
+
+        assertTrue(expected <= 2 * amount && expected >= 2 * amount - 1);
     }
 }

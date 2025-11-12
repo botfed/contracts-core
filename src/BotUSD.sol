@@ -72,7 +72,6 @@ interface IStrategyManager {
  * ## Security Model
  * - Owner: Can pause, upgrade, change manager/rewarder
  * - RiskAdmin: Can pause, adjust TVL caps, manage whitelist
- * - Rewarder: Can mint inflationary rewards (rate-limited)
  * - Users: Can deposit/withdraw when whitelisted (if active)
  */
 contract BotUSD is
@@ -135,7 +134,7 @@ contract BotUSD is
      * @dev Mints BotUSD based on protocol profits for staking incentives
      *      Subject to MAX_INFLATION_PER_MINT_BIPS and MIN_WAIT_MINT_SECONDS limits
      */
-    address public rewarder;
+    address public oracle;
 
     /**
      * @notice Maximum total value locked (in BotUSD units)
@@ -157,24 +156,13 @@ contract BotUSD is
      */
     mapping(address => bool) public userWhitelist;
 
-    /// @dev Deprecated: Previously used for tracking withdraw requests
-    mapping(uint256 => uint256) public deprecated_requests;
+    uint256 public targetAssets; // formerly mapping(uint256=> uint256) deprecated_requests
+    uint256 public currentAssets; // formerly nextReqId
+    uint256 public lastUpdateTime; // formerly deprecated_amtRequested
 
-    /// @dev Deprecated: Previously used for request ID tracking
-    uint256 public deprecated_nextReqId;
-
-    /// @dev Deprecated: Previously used for total requested amount tracking
-    uint256 public deprecated_amtRequested;
-
-    /**
-     * @notice Timestamp of last reward mint
-     * @dev Used to enforce MIN_WAIT_MINT_SECONDS cooldown
-     *      Starts at 0, allowing immediate first mint
-     */
-    uint256 public lastRewardMintTime;
-
-    /// @notice Withdrawal fee in basis points (25 = 0.25%)
+    uint256 public dripDuration;
     uint256 public withdrawalFeeBips;
+    bool private _v2Initialized;
 
     /* ========== EVENTS ========== */
 
@@ -197,7 +185,6 @@ contract BotUSD is
      * @param old Previous rewarder address
      * @param newAddr New rewarder address
      */
-    event RewarderSet(address indexed old, address indexed newAddr);
 
     /**
      * @notice Emitted when capital is deployed to StrategyManager
@@ -233,14 +220,6 @@ contract BotUSD is
     event TVLCapChanged(uint256 newCap);
 
     /**
-     * @notice Emitted when rewards are minted
-     * @param to Address that received minted rewards (rewarder)
-     * @param amount Amount of BotUSD minted
-     * @param timestamp Block timestamp of mint
-     */
-    event RewardsMinted(address indexed to, uint256 amount, uint256 timestamp);
-
-    /**
      * @notice Emitted when BotUSD is burned
      * @param from Address that burned tokens
      * @param amount Amount of BotUSD burned
@@ -249,6 +228,7 @@ contract BotUSD is
 
     event WithdrawalFeeChanged(uint256 newFeeBips);
     event FeeReceiverSet(address indexed oldReceiver, address indexed newReceiver);
+    event OracleSet(address indexed old, address indexed newAddr);
 
     /* ========== ERRORS ========== */
 
@@ -272,6 +252,7 @@ contract BotUSD is
 
     error FeeTooHigh();
     error InsufficientReceived(uint256 expected, uint256 received);
+    error IncorrectExpected();
 
     /* ========== CONSTRUCTOR ========== */
 
@@ -292,7 +273,6 @@ contract BotUSD is
      * @param symbol_ Token symbol (e.g., "botUSD")
      * @param initialOwner Owner address with full admin privileges
      * @param manager_ StrategyManager address for yield generation
-     * @param rewarder_ RewardSilo address (can be zero initially)
      *
      * Initial state:
      * - TVL cap: unlimited (type(uint256).max)
@@ -304,14 +284,13 @@ contract BotUSD is
         string memory name_,
         string memory symbol_,
         address initialOwner,
-        address manager_,
-        address rewarder_
+        address manager_
     ) public initializer {
         if (address(asset_) == address(0)) revert ZeroAddress();
         if (initialOwner == address(0)) revert ZeroAddress();
 
-        rewarder = rewarder_;
         riskAdmin = initialOwner;
+        oracle = initialOwner;
         tvlCap = type(uint256).max;
         userWhitelistActive = true;
 
@@ -335,12 +314,8 @@ contract BotUSD is
         _;
     }
 
-    /**
-     * @notice Restricts function to authorized rewarder
-     * @dev Only RewardSilo can mint inflationary rewards
-     */
-    modifier onlyRewarder() {
-        if (msg.sender != rewarder) revert NotAuth();
+    modifier onlyOracle() {
+        if (msg.sender != oracle) revert NotAuth();
         _;
     }
 
@@ -400,22 +375,12 @@ contract BotUSD is
         emit RiskAdminSet(old, a);
     }
 
-    /**
-     * @notice Updates the rewarder address
-     * @dev Rewarder (RewardSilo) can mint inflationary rewards
-     *
-     * @param a New rewarder address
-     *
-     * Requirements:
-     * - Caller must be owner
-     * - New address must not be zero
-     */
-    function setRewarder(address a) external onlyOwner {
+    function setOracle(address a) external onlyOwner {
         if (a == address(0)) revert ZeroAddress();
-        address old = rewarder;
-        rewarder = a;
-        emit RewarderSet(old, a);
+        emit OracleSet(oracle, a);
+        oracle = a;
     }
+
     // Setter
     function setFeeReceiver(address a) external onlyOwner {
         if (a == address(0)) revert ZeroAddress();
@@ -532,6 +497,8 @@ contract BotUSD is
         uint256 received = IERC20(asset()).balanceOf(address(this)) - bal0;
         if (received < assets) revert InsufficientReceived(assets, received);
 
+        currentAssets += received;
+        targetAssets += received;
         // Deploy capital immediately to StrategyManager
         _pushToManager(received);
 
@@ -572,37 +539,6 @@ contract BotUSD is
     }
 
     /**
-     * @notice Mints inflationary rewards for staking incentives
-     * @dev Only callable by authorized rewarder (RewardSilo)
-     *      Subject to rate limits for security:
-     *      - Max 5% of total supply per mint
-     *      - Minimum 1 week between mints
-     *
-     * @param amount Amount of BotUSD to mint
-     *
-     * Requirements:
-     * - Contract must not be paused
-     * - Caller must be rewarder
-     * - Must wait MIN_WAIT_MINT_SECONDS since last mint
-     * - Amount must not exceed MAX_INFLATION_PER_MINT_BIPS
-     *
-     * Note: Minted tokens are sent to rewarder (RewardSilo) which
-     *       drips them to StakingVault over time
-     */
-    function mintRewards(uint256 amount) external onlyRewarder whenNotPaused nonReentrant {
-        if (block.timestamp < lastRewardMintTime + MIN_WAIT_MINT_SECONDS) {
-            revert MintTooSoon();
-        }
-        if (amount * 10_000 > totalSupply() * MAX_INFLATION_PER_MINT_BIPS) {
-            revert MintExceedsLimit();
-        }
-
-        lastRewardMintTime = block.timestamp;
-        _mint(rewarder, amount);
-        emit RewardsMinted(rewarder, amount, block.timestamp);
-    }
-
-    /**
      * @notice Redeems shares for assets 1:1
      * @dev Pulls liquidity from StrategyManager if needed
      *
@@ -639,7 +575,11 @@ contract BotUSD is
         // Route fee if configured (else it remains in the vault)
         if (fee > 0 && feeReceiver != address(0)) {
             IERC20(asset()).safeTransfer(feeReceiver, fee);
+            currentAssets -= fee;
+            targetAssets -= fee;
         }
+        currentAssets -= assetsAfterFee;
+        targetAssets -= assetsAfterFee;
 
         // Burn exactly `shares`, pay the receiver the net
         _withdraw(msg.sender, receiver, owner_, assetsAfterFee, shares);
@@ -683,19 +623,31 @@ contract BotUSD is
         return 0;
     }
 
-    /**
-     * @notice Returns total assets backing the vault
-     * @dev Always equals totalSupply() to enforce 1:1 backing
-     *      This is the core mechanism ensuring BotUSD = 1 USDC
-     *
-     * @return Total assets (equal to total supply)
-     *
-     * Note: Does NOT include assets in StrategyManager in this calculation
-     *       because those are already accounted for in totalSupply().
-     *       The 1:1 invariant is: totalSupply() = initial_deposits - losses
-     */
+    // Gains drip over dripDuration period, but losses are realized immediately
     function totalAssets() public view override returns (uint256) {
-        return totalSupply();
+        if (targetAssets <= currentAssets) {
+            return targetAssets;
+        }
+        uint256 elapsed = block.timestamp - lastUpdateTime;
+        if (elapsed >= dripDuration) return targetAssets;
+        uint256 delta = targetAssets - currentAssets;
+        return currentAssets + (delta * elapsed) / dripDuration;
+    }
+    function updateTargetAssets(uint256 expectedCurrentAssets, uint256 newTarget) external onlyOracle {
+        currentAssets = totalAssets(); // lock in current drip position
+        if (currentAssets != expectedCurrentAssets) revert IncorrectExpected();
+        targetAssets = newTarget;
+        lastUpdateTime = block.timestamp;
+    }
+
+    function initializeV2(uint256 _targetAssets) external onlyOwner {
+        require(!_v2Initialized, "Already initialized");
+        targetAssets = _targetAssets == 0 ? totalSupply() : _targetAssets;
+        currentAssets = totalSupply();
+        lastUpdateTime = block.timestamp;
+        dripDuration = 7 days;
+        oracle = owner();
+        _v2Initialized = true;
     }
 
     /**
@@ -708,9 +660,7 @@ contract BotUSD is
         uint256 bal = IERC20(asset()).balanceOf(address(this));
         if (address(manager) == address(0)) return bal;
         uint256 m = manager.maxWithdrawable();
-        unchecked {
-            return bal + m;
-        }
+        return bal + m < currentAssets ? bal + m : currentAssets;
     }
 
     /**
@@ -794,8 +744,8 @@ contract BotUSD is
     /**
      * @dev Storage gap for future upgrades
      * Original: 50 slots
-     * Used: 2 slots for lastRewardMintTime, withdrawalFeeBips (Nov 10 2025)
-     * Remaining: 48 slots
+     * Used: 3 slots for dripDuration, withdrawalFeeBips, _v2Initialized (Nov 11 2025)
+     * Remaining: 47 slots
      */
-    uint256[48] private __gap;
+    uint256[47] private __gap;
 }
