@@ -253,6 +253,25 @@ contract sBotUSDTest is Test {
     }
 
     /* -------------------- withdraw / redeem & silo pull -------------------- */
+    function testWithdraw() public {
+        // Setup: User gets staked shares
+        uint256 usdcAmt = 50_000e6;
+        vm.startPrank(user);
+        usdc.approve(address(baseVault), usdcAmt);
+        uint256 vaultShares = baseVault.deposit(usdcAmt, user);
+        IERC20(address(baseVault)).approve(address(stakingVault), vaultShares);
+        stakingVault.deposit(vaultShares, user);
+        vm.stopPrank();
+        assertEq(usdcAmt, vaultShares);
+
+        // Withdraw
+        uint256 balBefore = IERC20(address(baseVault)).balanceOf(user);
+        vm.startPrank(user);
+        uint256 assets = stakingVault.withdraw(vaultShares, user, user);
+        vm.stopPrank();
+
+        assertEq(assets, vaultShares);
+    }
 
     function testWithdrawPullsFromSilo() public {
         // Setup: User gets staked shares
