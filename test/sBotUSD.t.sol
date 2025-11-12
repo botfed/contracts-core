@@ -2,7 +2,7 @@
 pragma solidity ^0.8.24;
 
 import "forge-std/Test.sol";
-import {sBotUSD} from "../src/sBotUSD.sol";
+import {sBotUSD, IWhitelistable} from "../src/sBotUSD.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {PausableUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
@@ -34,11 +34,23 @@ contract MockERC20 is ERC20 {
 }
 
 // Simple ERC4626 vault for testing
-contract MockVault is ERC4626 {
-    constructor(IERC20 asset_, string memory name_, string memory symbol_) ERC4626(asset_) ERC20(name_, symbol_) {}
+contract MockVault is ERC4626, IWhitelistable {
+    bool public userWhitelistActive;
+    mapping(address => bool) public userWhitelist;
+
+    constructor(IERC20 asset_, string memory name_, string memory symbol_) ERC4626(asset_) ERC20(name_, symbol_) {
+        userWhitelistActive = false;
+    }
 
     function mint(address to, uint256 amount) external {
         _mint(to, amount);
+    }
+
+    function setWhitelistActive(bool active) external {
+        userWhitelistActive = active;
+    }
+    function setUserWhitelisted(address user, bool allowed) external {
+        userWhitelist[user] = allowed;
     }
 }
 
@@ -199,6 +211,45 @@ contract sBotUSDTest is Test {
         assertEq(shares, vaultShares);
         assertEq(stakingVault.balanceOf(user), vaultShares);
         assertEq(IERC20(address(baseVault)).balanceOf(address(stakingVault)), vaultShares);
+    }
+
+    function testDepositMints_Whitelisted() public {
+        // First get base vault shares
+        uint256 usdcAmt = 100_000e6;
+        vm.startPrank(user);
+        usdc.approve(address(baseVault), usdcAmt);
+        uint256 vaultShares = baseVault.deposit(usdcAmt, user);
+
+        baseVault.setWhitelistActive(true);
+        baseVault.setUserWhitelisted(user, true);
+
+        // Then stake vault shares to get sBotUSD
+        IERC20(address(baseVault)).approve(address(stakingVault), vaultShares);
+        uint256 shares = stakingVault.deposit(vaultShares, user);
+        vm.stopPrank();
+
+        assertEq(shares, vaultShares);
+        assertEq(stakingVault.balanceOf(user), vaultShares);
+        assertEq(IERC20(address(baseVault)).balanceOf(address(stakingVault)), vaultShares);
+    }
+
+    function testDeposit_RevertsWhitelist() public {
+        // First get base vault shares
+        uint256 usdcAmt = 100_000e6;
+        vm.startPrank(user);
+        usdc.approve(address(baseVault), usdcAmt);
+        uint256 vaultShares = baseVault.deposit(usdcAmt, user);
+
+        baseVault.setWhitelistActive(true);
+
+        // Then stake vault shares to get sBotUSD
+        IERC20(address(baseVault)).approve(address(stakingVault), vaultShares);
+        vm.expectRevert(sBotUSD.NotAuth.selector);
+        uint256 shares = stakingVault.deposit(vaultShares, user);
+        vm.stopPrank();
+
+        assertEq(shares, 0);
+        assertEq(stakingVault.balanceOf(user), 0);
     }
 
     /* -------------------- withdraw / redeem & silo pull -------------------- */
@@ -370,6 +421,49 @@ contract sBotUSDTest is Test {
         assertEq(stakingVault.balanceOf(user), 0);
         // Should get back approximately what was put in
         assertApproxEqAbs(usdc.balanceOf(user), 1_000_000e6, 1e6);
+    }
+
+    function testZapBuy_FailWhitelist_NoneWhitelisted() public {
+        uint256 usdcAmount = 25_000e6;
+
+        baseVault.setWhitelistActive(true);
+
+        vm.startPrank(user);
+        usdc.approve(address(stakingVault), usdcAmount);
+        vm.expectRevert();
+        uint256 shares = stakingVault.zapBuy(usdcAmount, user);
+        vm.stopPrank();
+
+        assertEq(stakingVault.balanceOf(user), 0);
+    }
+
+    function testZapBuy_FailWhitelist_OneWhitelisted() public {
+        uint256 usdcAmount = 25_000e6;
+
+        baseVault.setWhitelistActive(true);
+        baseVault.setUserWhitelisted(makeAddr("0xrando"), true);
+
+        vm.startPrank(user);
+        usdc.approve(address(stakingVault), usdcAmount);
+        vm.expectRevert();
+        uint256 shares = stakingVault.zapBuy(usdcAmount, user);
+        vm.stopPrank();
+
+        assertEq(stakingVault.balanceOf(user), 0);
+    }
+
+    function testZapBuy_WithWhitelist() public {
+        uint256 usdcAmount = 25_000e6;
+
+        baseVault.setWhitelistActive(true);
+        baseVault.setUserWhitelisted(user, true);
+
+        vm.startPrank(user);
+        usdc.approve(address(stakingVault), usdcAmount);
+        uint256 shares = stakingVault.zapBuy(usdcAmount, user);
+        vm.stopPrank();
+
+        assertEq(stakingVault.balanceOf(user), shares);
     }
 
     /* ------------------------------ UUPS upgrade ---------------------------- */

@@ -13,6 +13,11 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import {ISilo} from "./RewardSilo.sol";
 
+interface IWhitelistable {
+    function userWhitelistActive() external view returns (bool);
+    function userWhitelist(address) external view returns (bool);
+}
+
 /**
  * @title Pausable4626Vault
  * @notice Upgradeable ERC-4626 vault with pausing. Shares are ERC-20.
@@ -94,6 +99,16 @@ contract sBotUSD is
         _;
     }
 
+    modifier onlyWhitelistedInBase(address user) {
+        // asset() returns BotUSD vault address
+        IWhitelistable baseVault = IWhitelistable(address(asset()));
+
+        if (baseVault.userWhitelistActive() && !baseVault.userWhitelist(user)) {
+            revert NotAuth();
+        }
+        _;
+    }
+
     /*---- role setters ---- */
 
     function setSilo(address a) external onlyOwner whenPaused {
@@ -134,7 +149,10 @@ contract sBotUSD is
      * @param receiver Address to receive sBotUSD
      * @return shares Amount of sBotUSD received
      */
-    function zapBuy(uint256 usdcAmount, address receiver) external whenNotPaused nonReentrant returns (uint256 shares) {
+    function zapBuy(
+        uint256 usdcAmount,
+        address receiver
+    ) external whenNotPaused nonReentrant onlyWhitelistedInBase(receiver) returns (uint256 shares) {
         if (usdcAmount == 0) return 0;
         address baseVault = asset();
         IERC20 usdc = IERC20(ERC4626Upgradeable(baseVault).asset());
@@ -170,25 +188,24 @@ contract sBotUSD is
      * @dev Zaps: sBotUSD → BotUSD → USDC
      * @param sBotUsdShares Amount of sBotUSD to sell
      * @param receiver Address to receive USDC
-     * @param owner Owner of sBotUSD being redeemed
+     * @param owner_ Owner of sBotUSD being redeemed
      * @return usdcAmount Amount of USDC received (after withdrawal fee)
      */
     function zapSell(
         uint256 sBotUsdShares,
         address receiver,
-        address owner
-    ) external whenNotPaused nonReentrant returns (uint256 usdcAmount) {
+        address owner_
+    ) external whenNotPaused nonReentrant onlyWhitelistedInBase(owner_) returns (uint256 usdcAmount) {
         if (sBotUsdShares == 0) return 0;
         // 1. Redeem sBotUSD for BotUSD
-        uint256 botUsdAmount = _redeemInternal(sBotUsdShares, address(this), owner);
+        uint256 botUsdAmount = _redeemInternal(sBotUsdShares, address(this), owner_);
         if (botUsdAmount == 0) revert ZeroAssets();
 
-        // 2. Redeem BotUSD for USDC (this handles withdrawal fee)
         IERC20(asset()).forceApprove(asset(), botUsdAmount);
         usdcAmount = ERC4626Upgradeable(asset()).redeem(botUsdAmount, receiver, address(this));
         if (usdcAmount == 0) revert ZeroAssets();
 
-        emit ZapSell(msg.sender, receiver, owner, sBotUsdShares, usdcAmount);
+        emit ZapSell(msg.sender, receiver, owner_, sBotUsdShares, usdcAmount);
     }
 
     /* ------------------------ ERC-4626 external functions ---------------------- */
@@ -196,7 +213,7 @@ contract sBotUSD is
     function deposit(
         uint256 assets,
         address receiver
-    ) public override whenNotPaused nonReentrant returns (uint256 shares) {
+    ) public override whenNotPaused nonReentrant onlyWhitelistedInBase(receiver) returns (uint256 shares) {
         if (assets == 0) return 0;
         uint256 maxAssets = maxDeposit(receiver);
         if (assets > maxAssets) revert ERC4626ExceededMaxDeposit(receiver, assets, maxAssets);
@@ -207,6 +224,7 @@ contract sBotUSD is
         uint256 received = IERC20(asset()).balanceOf(address(this)) - bal0;
         if (received < assets) revert InsufficientReceived(assets, received);
         _mint(receiver, shares);
+        emit Deposit(msg.sender, receiver, assets, shares);
     }
 
     function maxDeposit(address account) public view override returns (uint256) {
@@ -226,7 +244,7 @@ contract sBotUSD is
         uint256 shares,
         address receiver,
         address owner_
-    ) public override whenNotPaused nonReentrant returns (uint256 assets) {
+    ) public override whenNotPaused nonReentrant onlyWhitelistedInBase(owner_) returns (uint256 assets) {
         return _redeemInternal(shares, receiver, owner_);
     }
     function _redeemInternal(uint256 shares, address receiver, address owner_) internal returns (uint256 assets) {

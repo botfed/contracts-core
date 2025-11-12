@@ -349,8 +349,8 @@ contract BotUSD is
      * @notice Restricts function to whitelisted users when whitelist active
      * @dev Allows permissionless access when whitelist is disabled
      */
-    modifier onlyWhitelisted() {
-        if (userWhitelistActive && !userWhitelist[msg.sender]) revert NotAuth();
+    modifier onlyWhitelisted(address receiver) {
+        if (userWhitelistActive && !userWhitelist[receiver]) revert NotAuth();
         _;
     }
 
@@ -520,7 +520,7 @@ contract BotUSD is
     function deposit(
         uint256 assets,
         address receiver
-    ) public override whenNotPaused nonReentrant onlyWhitelisted returns (uint256 shares) {
+    ) public override whenNotPaused nonReentrant onlyWhitelisted(receiver) returns (uint256 shares) {
         if (address(manager) == address(0)) revert ZeroAddress();
         uint256 maxAssets = maxDeposit(receiver);
         if (assets > maxAssets) revert ERC4626ExceededMaxDeposit(receiver, assets, maxAssets);
@@ -625,7 +625,7 @@ contract BotUSD is
         uint256 shares,
         address receiver,
         address owner_
-    ) public override whenNotPaused nonReentrant onlyWhitelisted returns (uint256 assetsAfterFee) {
+    ) public override whenNotPaused nonReentrant onlyWhitelisted(owner_) returns (uint256 assetsAfterFee) {
         uint256 maxShares = maxRedeem(owner_);
         if (shares > maxShares) revert ERC4626ExceededMaxRedeem(owner_, shares, maxShares);
 
@@ -673,7 +673,7 @@ contract BotUSD is
         uint256 assets,
         address receiver,
         address owner_
-    ) public override whenNotPaused nonReentrant onlyWhitelisted returns (uint256 shares) {
+    ) public override whenNotPaused nonReentrant onlyWhitelisted(owner_) returns (uint256 shares) {
         revert Disabled();
     }
 
