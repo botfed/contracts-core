@@ -97,6 +97,7 @@ contract RewardSilo is
 
     /// @notice StakingVault address authorized to withdraw dripped rewards
     address public vault;
+    address public feeReceiver;
 
     /// @notice Amount from previous mints that has dripped but not been withdrawn
     /// @dev Synced at start of each new mint to preserve unredeemed rewards
@@ -107,7 +108,6 @@ contract RewardSilo is
     /// @dev Used to calculate linear drip progress
     uint256 public lastMintTime;
     uint256 public lastUndripped;
-    address public feeReceiver;
     uint256 public performanceFee;
 
     /* ========== EVENTS ========== */
@@ -147,6 +147,7 @@ contract RewardSilo is
     error ZeroAddress();
 
     error FeeTooHigh();
+    error MintMismatch(uint256 expected, uint256 received);
 
     /* ========== MODIFIERS ========== */
 
@@ -262,15 +263,19 @@ contract RewardSilo is
      * - Amount must pass BotUSD contract's minting limits (5% max, 1 week cooldown)
      */
 
-    function mintRewards(uint256 amount) external onlyOwner whenNotPaused {
+    function mintRewards(uint256 amount) external onlyOwner whenNotPaused nonReentrant {
+        if (amount == 0) return;
         // crystallize current drip
         accumulated = maxWithdrawable();
         withdrawn = 0;
 
         uint256 fee = (amount * performanceFee) / 10_000;
 
+        uint256 balBefore = asset.balanceOf(address(this));
         // Mint first
         asset.mintRewards(amount);
+        uint256 received = asset.balanceOf(address(this)) - balBefore;
+        if (amount != received) revert MintMismatch(amount, received);
 
         // Pay fee if configured
         if (fee > 0 && feeReceiver != address(0)) {
