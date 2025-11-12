@@ -307,7 +307,8 @@ contract RewardSilo is
             newlyDripped = (lastUndripped * elapsed) / DRIP_DURATION_SECONDS;
         }
         uint256 bal = asset.balanceOf(address(this));
-        uint256 theoretical = accumulated + newlyDripped - withdrawn;
+        uint256 dripped = accumulated + newlyDripped;
+        uint256 theoretical = withdrawn < dripped ? dripped - withdrawn : 0;
 
         return theoretical <= bal ? theoretical : bal;
     }

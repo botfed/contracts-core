@@ -639,13 +639,12 @@ contract BotUSD is
         uint256 bal = IERC20(asset()).balanceOf(address(this));
         if (bal < gross) _pullFromManager(gross - bal);
 
+        // Burn exactly `shares`, pay the receiver the net
+        _withdraw(msg.sender, receiver, owner_, assetsAfterFee, shares);
         // Route fee if configured (else it remains in the vault)
         if (fee > 0 && feeReceiver != address(0)) {
             IERC20(asset()).safeTransfer(feeReceiver, fee);
         }
-
-        // Burn exactly `shares`, pay the receiver the net
-        _withdraw(msg.sender, receiver, owner_, assetsAfterFee, shares);
     }
 
     // Fee-aware preview: returns net to receiver for a given `shares`
