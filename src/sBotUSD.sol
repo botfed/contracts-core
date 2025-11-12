@@ -269,7 +269,7 @@ contract sBotUSD is
         uint256 assets,
         address receiver,
         address owner_
-    ) public override whenNotPaused nonReentrant returns (uint256 shares) {
+    ) public override whenNotPaused nonReentrant onlyWhitelistedInBase(owner_) returns (uint256 shares) {
         if (assets == 0) return 0;
         uint256 maxAssets = maxWithdraw(owner_);
         if (assets > maxAssets) revert ERC4626ExceededMaxWithdraw(owner_, assets, maxAssets);

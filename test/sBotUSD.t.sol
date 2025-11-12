@@ -260,17 +260,83 @@ contract sBotUSDTest is Test {
         usdc.approve(address(baseVault), usdcAmt);
         uint256 vaultShares = baseVault.deposit(usdcAmt, user);
         IERC20(address(baseVault)).approve(address(stakingVault), vaultShares);
-        stakingVault.deposit(vaultShares, user);
+        uint256 stakingShares = stakingVault.deposit(vaultShares, user);
         vm.stopPrank();
         assertEq(usdcAmt, vaultShares);
 
         // Withdraw
         uint256 balBefore = IERC20(address(baseVault)).balanceOf(user);
         vm.startPrank(user);
-        uint256 assets = stakingVault.withdraw(vaultShares, user, user);
+        uint256 shares = stakingVault.withdraw(vaultShares, user, user);
+        vm.stopPrank();
+
+        assertEq(shares, stakingShares);
+    }
+
+    function testWithdraw_RevertsWhitelist() public {
+        // Setup: User gets staked shares
+        uint256 usdcAmt = 50_000e6;
+        vm.startPrank(user);
+        usdc.approve(address(baseVault), usdcAmt);
+        uint256 vaultShares = baseVault.deposit(usdcAmt, user);
+        IERC20(address(baseVault)).approve(address(stakingVault), vaultShares);
+        uint256 stakingShares = stakingVault.deposit(vaultShares, user);
+        vm.stopPrank();
+        assertEq(usdcAmt, vaultShares);
+
+        baseVault.setWhitelistActive(true);
+
+        // Withdraw
+        uint256 balBefore = IERC20(address(baseVault)).balanceOf(user);
+        vm.startPrank(user);
+        vm.expectRevert(sBotUSD.NotAuth.selector);
+        uint256 shares = stakingVault.withdraw(vaultShares, user, user);
+        vm.stopPrank();
+
+        assertEq(shares, 0);
+    }
+
+    function testRedeem() public {
+        // Setup: User gets staked shares
+        uint256 usdcAmt = 50_000e6;
+        vm.startPrank(user);
+        usdc.approve(address(baseVault), usdcAmt);
+        uint256 vaultShares = baseVault.deposit(usdcAmt, user);
+        IERC20(address(baseVault)).approve(address(stakingVault), vaultShares);
+        uint256 stakingShares = stakingVault.deposit(vaultShares, user);
+        vm.stopPrank();
+        assertEq(usdcAmt, vaultShares);
+
+        // Withdraw
+        uint256 balBefore = IERC20(address(baseVault)).balanceOf(user);
+        vm.startPrank(user);
+        uint256 assets = stakingVault.redeem(stakingShares, user, user);
         vm.stopPrank();
 
         assertEq(assets, vaultShares);
+    }
+
+    function testRedeem_RevertsWhitelist() public {
+        // Setup: User gets staked shares
+        uint256 usdcAmt = 50_000e6;
+        vm.startPrank(user);
+        usdc.approve(address(baseVault), usdcAmt);
+        uint256 vaultShares = baseVault.deposit(usdcAmt, user);
+        IERC20(address(baseVault)).approve(address(stakingVault), vaultShares);
+        uint256 stakingShares = stakingVault.deposit(vaultShares, user);
+        vm.stopPrank();
+        assertEq(usdcAmt, vaultShares);
+
+        baseVault.setWhitelistActive(true);
+
+        // Withdraw
+        uint256 balBefore = IERC20(address(baseVault)).balanceOf(user);
+        vm.startPrank(user);
+        vm.expectRevert(sBotUSD.NotAuth.selector);
+        uint256 assets = stakingVault.redeem(stakingShares, user, user);
+        vm.stopPrank();
+
+        assertEq(assets, 0);
     }
 
     function testWithdrawPullsFromSilo() public {
