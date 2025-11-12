@@ -46,13 +46,7 @@ contract DeployRewardSilo is Script {
         console.log("Deploying RewardSilo proxy...");
         bytes memory initData = abi.encodeCall(
             RewardSilo.initialize,
-            (
-                IMintableBotUSD(config.botUSD),
-                config.owner,
-                config.vault,
-                config.feeReceiver,
-                config.initFee
-            )
+            (IMintableBotUSD(config.botUSD), config.owner, config.vault, config.feeReceiver, config.initFee)
         );
 
         ERC1967Proxy rewardSiloProxy = new ERC1967Proxy(address(rewardSiloImpl), initData);
@@ -95,7 +89,7 @@ contract DeployRewardSilo is Script {
         // Required parameters
         address botUSD = vm.envAddress("BOTUSD_ADDRESS");
         address owner = vm.envAddress("BF_GOV");
-        address vault = vm.envAddress("STAKING_VAULT_ADDRESS");
+        address vault = vm.envAddress("STAKED_BOTUSD_ADDRESS");
 
         // Optional parameters - default to address(0) and 0 if not set
         address feeReceiver;
@@ -115,13 +109,7 @@ contract DeployRewardSilo is Script {
             console.log("INIT_FEE_BIPS not set, using 0");
         }
 
-        return DeployConfig({
-            botUSD: botUSD,
-            owner: owner,
-            vault: vault,
-            feeReceiver: feeReceiver,
-            initFee: initFee
-        });
+        return DeployConfig({botUSD: botUSD, owner: owner, vault: vault, feeReceiver: feeReceiver, initFee: initFee});
     }
 }
 
