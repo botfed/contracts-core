@@ -32,6 +32,8 @@ contract StrategyManager is Initializable, UUPSUpgradeable, OwnableUpgradeable, 
     mapping(address => uint256) public strategyDeployed;
     mapping(address => uint256) public strategyWithdrawn;
 
+    bool internal _paused;
+
     event StrategyAdded(address indexed strat);
     event StrategyRemoved(address indexed strat);
     event CapitalPushed(address indexed strat, uint256 amount);
@@ -39,6 +41,9 @@ contract StrategyManager is Initializable, UUPSUpgradeable, OwnableUpgradeable, 
     event WithdrawnTo(address indexed to, uint256 amount);
     event SetVault(address indexed oldVault, address indexed newVault);
     event SetExec(address indexed oldExec, address indexed newExec);
+
+    event Paused(address account);
+    event Unpaused(address account);
 
     error UnknownStrategy();
     error InconsistentReturn();
@@ -54,6 +59,16 @@ contract StrategyManager is Initializable, UUPSUpgradeable, OwnableUpgradeable, 
     error StrategyInvalidAsset();
 
     /* Modifiers */
+
+    modifier whenNotPaused() {
+        require(!paused(), "Paused");
+        _;
+    }
+
+    modifier whenPaused() {
+        require(paused(), "Not paused");
+        _;
+    }
 
     modifier onlyVault() {
         _onlyVault();
@@ -88,6 +103,15 @@ contract StrategyManager is Initializable, UUPSUpgradeable, OwnableUpgradeable, 
     }
 
     /* ------------------------ Admin functions ------------------------ */
+    function pause() external onlyOwner whenNotPaused {
+        _paused = true;
+        emit Paused(msg.sender);
+    }
+
+    function unpause() external onlyOwner whenPaused {
+        _paused = false;
+        emit Unpaused(msg.sender);
+    }
 
     function setVault(address a) external onlyOwner {
         if (a == address(0)) revert ZeroAddress();
@@ -137,7 +161,7 @@ contract StrategyManager is Initializable, UUPSUpgradeable, OwnableUpgradeable, 
 
     /* ---------------------- Capital movement --------------------- */
 
-    function pushToStrategy(address strat, uint256 amount) external nonReentrant onlyExecOrOwner {
+    function pushToStrategy(address strat, uint256 amount) external nonReentrant onlyExecOrOwner whenNotPaused {
         if (!isStrategy[strat]) revert UnknownStrategy();
         if (amount == 0) revert ZeroAmount();
         uint256 bal = asset.balanceOf(address(this));
@@ -151,7 +175,7 @@ contract StrategyManager is Initializable, UUPSUpgradeable, OwnableUpgradeable, 
     function pullFromStrategy(
         address strat,
         uint256 requested
-    ) public nonReentrant onlyExecOrOwner returns (uint256 received) {
+    ) public nonReentrant onlyExecOrOwner whenNotPaused returns (uint256 received) {
         if (!isStrategy[strat]) revert UnknownStrategy();
         uint256 balanceBefore = asset.balanceOf(address(this));
         received = IStrategy(strat).withdrawToManager(requested);
@@ -163,7 +187,7 @@ contract StrategyManager is Initializable, UUPSUpgradeable, OwnableUpgradeable, 
 
     /// @notice Sends `amount` of idle `asset` to the vault.
     ///         Does NOT currently pull from strategies. Off-chain orchestration should pre-fund this.
-    function withdrawToVault(uint256 amount) external onlyVault nonReentrant {
+    function withdrawToVault(uint256 amount) external onlyVault nonReentrant whenNotPaused {
         if (amount == 0) revert ZeroAmount();
         uint256 b0 = maxWithdrawable();
         if (b0 < amount) revert InsufficientAssets(amount, b0);
@@ -175,7 +199,11 @@ contract StrategyManager is Initializable, UUPSUpgradeable, OwnableUpgradeable, 
 
     /// @notice Returns max amount withdrawable by vault. Currently just returns idle balance as we are not pulling from strats atomically.
     function maxWithdrawable() public view returns (uint256) {
+        if (paused()) return 0;
         return asset.balanceOf(address(this));
+    }
+    function paused() public view returns (bool) {
+        return _paused;
     }
 
     function strategiesLength() external view returns (uint256) {
@@ -189,5 +217,13 @@ contract StrategyManager is Initializable, UUPSUpgradeable, OwnableUpgradeable, 
         revert("no direct ETH");
     }
 
-    uint256[45] private __gap;
+    /* ========== STORAGE GAP ========== */
+
+    /**
+     * @dev Storage gap for future upgrades
+     * Original: 45 slots
+     * Used: 1 slots for _paused (Nov 13 2025)
+     * Remaining: 44 slots
+     */
+    uint256[44] private __gap;
 }

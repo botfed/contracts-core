@@ -791,7 +791,7 @@ contract BotUSD is
         emit VersionUpgraded(version);
         // Pause so we can manually review that rewarder and other sensitive params
         // were correctly set.
-        pause();
+        _pause();
     }
     /**
      * @notice Authorizes contract upgrades

@@ -520,4 +520,20 @@ contract StrategyManagerTest is Test {
         vm.expectRevert(abi.encodeWithSelector(StrategyManager.InconsistentReturn.selector));
         strategyManager.pullFromStrategy(address(mockStrategy1), 1000e18);
     }
+    function test_MaxWithdrawable() public {
+        vm.prank(owner);
+        strategyManager.addStrategy(address(mockStrategy1));
+        asset.mint(address(strategyManager), 10 ether);
+
+        assertEq(strategyManager.maxWithdrawable(), 10_000 ether + 10 ether);
+        vm.prank(owner);
+        strategyManager.pause();
+        assertEq(strategyManager.paused(), true);
+        assertEq(strategyManager.maxWithdrawable(), 0);
+
+        vm.prank(owner);
+        strategyManager.unpause();
+        assertEq(strategyManager.paused(), false);
+        assertEq(strategyManager.maxWithdrawable(), 10_000 ether + 10 ether);
+    }
 }

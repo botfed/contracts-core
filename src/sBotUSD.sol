@@ -203,7 +203,7 @@ contract sBotUSD is
         uint256 sBotUsdShares,
         address receiver,
         address owner_
-    ) external whenNotPaused nonReentrant onlyWhitelistedInBase(owner_) returns (uint256 usdcAmount) {
+    ) external whenNotPaused nonReentrant onlyWhitelistedInBase(receiver) returns (uint256 usdcAmount) {
         if (sBotUsdShares == 0) return 0;
         // 1. Redeem sBotUSD for BotUSD
         uint256 botUsdAmount = _redeemInternal(sBotUsdShares, address(this), owner_);
@@ -252,7 +252,7 @@ contract sBotUSD is
         uint256 shares,
         address receiver,
         address owner_
-    ) public override whenNotPaused nonReentrant onlyWhitelistedInBase(owner_) returns (uint256 assets) {
+    ) public override whenNotPaused nonReentrant onlyWhitelistedInBase(receiver) returns (uint256 assets) {
         return _redeemInternal(shares, receiver, owner_);
     }
     function _redeemInternal(uint256 shares, address receiver, address owner_) internal returns (uint256 assets) {
@@ -277,7 +277,7 @@ contract sBotUSD is
         uint256 assets,
         address receiver,
         address owner_
-    ) public override whenNotPaused nonReentrant onlyWhitelistedInBase(owner_) returns (uint256 shares) {
+    ) public override whenNotPaused nonReentrant onlyWhitelistedInBase(receiver) returns (uint256 shares) {
         if (assets == 0) return 0;
         uint256 maxAssets = maxWithdraw(owner_);
         if (assets > maxAssets) revert ERC4626ExceededMaxWithdraw(owner_, assets, maxAssets);
