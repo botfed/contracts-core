@@ -124,6 +124,7 @@ contract BotUSDTest is Test {
     address public feeReceiver = makeAddr("feeRec");
     address public user1 = makeAddr("user1");
     address public user2 = makeAddr("user2");
+    address public user3 = makeAddr("user3");
     address public rando = makeAddr("rando");
 
     uint256 constant INITIAL_TOKENS = 1_000_000_000; // 1e9 (with 6 decimals)
@@ -412,6 +413,21 @@ contract BotUSDTest is Test {
         assertEq(assetsOut, amount);
         assertEq(asset.balanceOf(address(manager)), managerBalBefore - amount);
         assertEq(vault.totalSupply(), 0);
+    }
+
+    function test_Redeem_WhitelistReverts() public {
+        uint256 amount = 700_000;
+        _approveAndDeposit(user1, amount);
+
+        uint256 managerBalBefore = asset.balanceOf(address(manager));
+
+        vm.prank(user1);
+        vm.expectRevert(BotUSD.NotAuth.selector);
+        uint256 assetsOut = vault.redeem(amount, user3, user1);
+
+        assertEq(assetsOut, 0);
+        assertEq(asset.balanceOf(address(manager)), managerBalBefore);
+        assertEq(vault.totalSupply(), amount);
     }
 
     function test_ZeroAmount_Exit_NoOp() public {

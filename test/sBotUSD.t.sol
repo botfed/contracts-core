@@ -285,7 +285,7 @@ contract sBotUSDTest is Test {
 
         address otherUser = makeAddr("0xEEBB");
         baseVault.setWhitelistActive(true);
-        baseVault.setUserWhitelisted(user, true);
+        baseVault.setUserWhitelisted(otherUser, true);
 
         // Withdraw
         vm.startPrank(user);
@@ -335,7 +335,15 @@ contract sBotUSDTest is Test {
 
         // Withdraw
         vm.startPrank(user);
+        vm.expectRevert(sBotUSD.NotAuth.selector);
         uint256 assets = stakingVault.redeem(stakingShares, otherUser, user);
+        vm.stopPrank();
+        
+        // Must whitelist recipient not owner
+        baseVault.setUserWhitelisted(otherUser, true);
+        // Withdraw
+        vm.startPrank(user);
+        assets = stakingVault.redeem(stakingShares, otherUser, user);
         vm.stopPrank();
 
         assertEq(assets, vaultShares);

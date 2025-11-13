@@ -619,7 +619,7 @@ contract BotUSD is
         uint256 shares,
         address receiver,
         address owner_
-    ) public override whenNotPaused nonReentrant onlyWhitelisted(owner_) returns (uint256 assetsAfterFee) {
+    ) public override whenNotPaused nonReentrant onlyWhitelisted(receiver) returns (uint256 assetsAfterFee) {
         uint256 maxShares = maxRedeem(owner_);
         if (shares > maxShares) revert ERC4626ExceededMaxRedeem(owner_, shares, maxShares);
 
@@ -667,7 +667,7 @@ contract BotUSD is
         uint256 assets,
         address receiver,
         address owner_
-    ) public override whenNotPaused nonReentrant onlyWhitelisted(owner_) returns (uint256 shares) {
+    ) public override whenNotPaused nonReentrant onlyWhitelisted(receiver) returns (uint256 shares) {
         revert Disabled();
     }
 
