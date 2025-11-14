@@ -633,7 +633,9 @@ contract sBotUSDTest is Test {
         assertEq(shares, stakingVault.maxZapSell(user));
 
         baseVault.setUserWhitelisted(user, false);
-        assertEq(0, stakingVault.maxZapSell(user));
+        vm.prank(user);
+        vm.expectRevert(sBotUSD.NotAuth.selector);
+        stakingVault.zapSell(shares, user, user);
     }
 
     /* ------------------------------ UUPS upgrade ---------------------------- */

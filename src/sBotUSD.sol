@@ -219,7 +219,6 @@ contract sBotUSD is
     }
 
     function maxZapSell(address owner_) public view returns (uint256 amount) {
-        if (!_isWhitelistedInBase(owner_)) return 0;
         uint256 baseRedeemable = ERC4626Upgradeable(asset()).maxRedeem(address(this));
         uint256 ownerRedeemable = maxRedeem(owner_);
         amount = convertToAssets(ownerRedeemable);
@@ -227,6 +226,7 @@ contract sBotUSD is
     }
 
     function maxZapBuy(address receiver) public view returns (uint256 usdcAmount) {
+        if (!_isWhitelistedInBase(receiver)) return 0;
         return ERC4626Upgradeable(asset()).maxDeposit(receiver);
     }
 
