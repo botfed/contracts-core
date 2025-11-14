@@ -52,6 +52,11 @@ contract MockVault is ERC4626, IWhitelistable {
     function setUserWhitelisted(address user, bool allowed) external {
         userWhitelist[user] = allowed;
     }
+
+    function maxRedeem(address user) public view  override returns (uint256) {
+        if (userWhitelistActive && !userWhitelist[user]) return 0;
+        return balanceOf(user);
+    }
 }
 
 // Mock Silo for sBotUSD
@@ -286,6 +291,8 @@ contract sBotUSDTest is Test {
         address otherUser = makeAddr("0xEEBB");
         baseVault.setWhitelistActive(true);
         baseVault.setUserWhitelisted(otherUser, true);
+        baseVault.setUserWhitelisted(user, true);
+        baseVault.setUserWhitelisted(address(stakingVault), true);
 
         // Withdraw
         vm.startPrank(user);
@@ -338,7 +345,7 @@ contract sBotUSDTest is Test {
         vm.expectRevert(sBotUSD.NotAuth.selector);
         uint256 assets = stakingVault.redeem(stakingShares, otherUser, user);
         vm.stopPrank();
-        
+
         // Must whitelist recipient not owner
         baseVault.setUserWhitelisted(otherUser, true);
         // Withdraw
@@ -596,6 +603,7 @@ contract sBotUSDTest is Test {
 
         baseVault.setWhitelistActive(true);
         baseVault.setUserWhitelisted(user, true);
+        baseVault.setUserWhitelisted(address(stakingVault), true);
 
         vm.startPrank(user);
         usdc.approve(address(stakingVault), usdcAmount);
@@ -603,6 +611,29 @@ contract sBotUSDTest is Test {
         vm.stopPrank();
 
         assertEq(stakingVault.balanceOf(user), shares);
+    }
+
+    function testMaxZapBuy() public {
+        uint256 maxDeposit = baseVault.maxDeposit(user);
+        assertEq(maxDeposit, stakingVault.maxZapBuy(user));
+    }
+
+    function testMaxZapSell() public {
+        uint256 usdcAmount = 25_000e6;
+
+        baseVault.setWhitelistActive(true);
+        baseVault.setUserWhitelisted(user, true);
+        baseVault.setUserWhitelisted(address(stakingVault), true);
+
+        vm.startPrank(user);
+        usdc.approve(address(stakingVault), usdcAmount);
+        uint256 shares = stakingVault.zapBuy(usdcAmount, user);
+        vm.stopPrank();
+
+        assertEq(shares, stakingVault.maxZapSell(user));
+
+        baseVault.setUserWhitelisted(user, false);
+        assertEq(0, stakingVault.maxZapSell(user));
     }
 
     /* ------------------------------ UUPS upgrade ---------------------------- */

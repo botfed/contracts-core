@@ -112,6 +112,11 @@ contract RewardSilo is
     uint256 public performanceFee;
     uint256 public dripDuration;
 
+    uint256 public totalMinted;
+    uint256 public lastSupply;
+    uint256 public lastDripDuration;
+    uint256 public version;
+
     /* ========== EVENTS ========== */
 
     /**
@@ -164,7 +169,7 @@ contract RewardSilo is
         _;
     }
 
-    function _onlyVault() internal {
+    function _onlyVault() internal view {
         if (msg.sender != vault) revert NotAuth();
     }
 
@@ -295,6 +300,10 @@ contract RewardSilo is
         asset.mintRewards(amount);
         uint256 received = asset.balanceOf(address(this)) - balBefore;
         if (amount != received) revert MintMismatch(amount, received);
+        // accounting for the UI
+        totalMinted += received;
+        lastSupply = asset.totalSupply();
+        lastDripDuration = dripDuration;
 
         // Pay fee if configured
         if (fee > 0 && feeReceiver != address(0)) {
@@ -357,7 +366,19 @@ contract RewardSilo is
         emit Withdrawn(amount);
     }
 
+    // Helper function for UI in bips, 10_000 = 1%
+    function projectedApr() public view returns (uint256) {
+        return (lastUndripped * 10_000 * 365 days) / (lastDripDuration * lastSupply);
+    }
+
     /* ========== UPGRADE AUTHORIZATION ========== */
+
+
+    function initializeV1_1() external onlyOwner {
+        require(version == 0, "Version already initialized");
+        totalMinted = lastUndripped;
+        version += 1;
+    }
 
     /**
      * @notice Authorizes contract upgrades
@@ -370,7 +391,9 @@ contract RewardSilo is
 
     /**
      * @dev Storage gap for future upgrades
-     * Allows adding new state variables without shifting storage layout
+     * Original: 50 slots
+     * Used: 4 slots for totalMinted, lastSupply, lastDripDuration, version (Nov 14 2025)
+     * Remaining: 46 slots
      */
-    uint256[50] private __gap;
+    uint256[46] private __gap;
 }

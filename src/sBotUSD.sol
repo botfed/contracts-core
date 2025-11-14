@@ -99,7 +99,7 @@ contract sBotUSD is
         _;
     }
 
-    function _onlyRiskAdminOrOwner() internal {
+    function _onlyRiskAdminOrOwner() internal view {
         if (msg.sender != riskAdmin && msg.sender != owner()) revert NotAuth();
     }
 
@@ -108,13 +108,15 @@ contract sBotUSD is
         _;
     }
 
-    function _onlyWhitelistedInBase(address user) internal {
-        // asset() returns BotUSD vault address
-        IWhitelistable baseVault = IWhitelistable(address(asset()));
-
-        if (baseVault.userWhitelistActive() && !baseVault.userWhitelist(user)) {
+    function _onlyWhitelistedInBase(address user) internal view {
+        if (!_isWhitelistedInBase(user)) {
             revert NotAuth();
         }
+    }
+
+    function _isWhitelistedInBase(address user) internal view returns (bool) {
+        IWhitelistable baseVault = IWhitelistable(address(asset()));
+        return !baseVault.userWhitelistActive() || baseVault.userWhitelist(user);
     }
 
     /*---- role setters ---- */
@@ -216,6 +218,18 @@ contract sBotUSD is
         emit ZapSell(msg.sender, receiver, owner_, sBotUsdShares, usdcAmount);
     }
 
+    function maxZapSell(address owner_) public view returns (uint256 amount) {
+        if (!_isWhitelistedInBase(owner_)) return 0;
+        uint256 baseRedeemable = ERC4626Upgradeable(asset()).maxRedeem(address(this));
+        uint256 ownerRedeemable = maxRedeem(owner_);
+        amount = convertToAssets(ownerRedeemable);
+        return amount < baseRedeemable ? amount : baseRedeemable;
+    }
+
+    function maxZapBuy(address receiver) public view returns (uint256 usdcAmount) {
+        return ERC4626Upgradeable(asset()).maxDeposit(receiver);
+    }
+
     /* ------------------------ ERC-4626 external functions ---------------------- */
 
     function deposit(
@@ -235,8 +249,9 @@ contract sBotUSD is
         emit Deposit(msg.sender, receiver, assets, shares);
     }
 
-    function maxDeposit(address) public view override returns (uint256) {
+    function maxDeposit(address owner_) public view override returns (uint256) {
         if (paused()) return 0;
+        if (!_isWhitelistedInBase(owner_)) return 0;
         return type(uint256).max;
     }
 

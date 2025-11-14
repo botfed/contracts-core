@@ -2,17 +2,12 @@
 pragma solidity ^0.8.24;
 
 import "forge-std/Test.sol";
+import {console} from "forge-std/console.sol";
 import {RewardSilo, IMintableBotUSD, OwnableUpgradeable} from "../src/RewardSilo.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {PausableUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 
-/* ----------------------------- UUPS upgrade ------------------------------ */
-contract RewardSiloV2 is RewardSilo {
-    function version() external pure returns (string memory) {
-        return "v2";
-    }
-}
 
 /* ---------------------- Mock BotUSD (mintRewards gated) ---------------------- */
 contract MockMintableBotUSD is IERC20 {
@@ -198,6 +193,20 @@ contract RewardSiloTest is Test {
         uint256 full = silo.maxWithdrawable();
         assertApproxEqAbs(full, amt, 1, "full");
     }
+    function testMintRewards_ProjectedAPR() public {
+        uint256 amt = 1_000_000e6;
+
+        // t=0
+        vm.prank(owner);
+        silo.mintRewards(amt);
+
+        assertEq(silo.totalMinted(), amt);
+        assertEq(silo.lastUndripped(), amt);
+        assertEq(silo.lastDripDuration(), silo.dripDuration());
+        assertEq(silo.lastSupply(), silo.asset().totalSupply());
+        assertEq(silo.projectedApr(), 10_000 * amt * 365 days / (silo.dripDuration() * silo.asset().totalSupply()));
+        console.log("Projected APR", silo.projectedApr());
+    }
 
     /* ------------------------- Withdraw: only vault -------------------------- */
     function testWithdrawOnlyVaultAndStateUpdate() public {
@@ -330,12 +339,10 @@ contract RewardSiloTest is Test {
     }
 
     function testUUPSUpgrade() public {
-        RewardSiloV2 newImpl = new RewardSiloV2();
+        RewardSilo newImpl = new RewardSilo();
 
         vm.prank(owner); // onlyOwner
-        silo.upgradeToAndCall(address(newImpl), "");
-
-        RewardSiloV2 siloV2 = RewardSiloV2(address(silo));
-        assertEq(siloV2.version(), "v2");
+        silo.upgradeToAndCall(address(newImpl), abi.encodeWithSelector(newImpl.initializeV1_1.selector));
+        assertEq(silo.version(), 1);
     }
 }

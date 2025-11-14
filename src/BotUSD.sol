@@ -777,7 +777,7 @@ contract BotUSD is
 
     /* ========== UPGRADE AUTHORIZATION ========== */
 
-    function initializeV1(address rewarder_, address feeReceiver_) external onlyOwner {
+    function initializeV1_0(address rewarder_, address feeReceiver_) external onlyOwner {
         require(version == 0, "Already initialized");
         deprecatedWithdrawNFT = address(0);
         deprecatedFulfiller = address(0);
@@ -792,6 +792,13 @@ contract BotUSD is
         // Pause so we can manually review that rewarder and other sensitive params
         // were correctly set.
         _pause();
+    }
+
+    function initializeV1_1() external onlyOwner {
+        require(version == 1, "Already initialized");
+        lastRewardMintTime =  0;  // set to zero to test out reward mint live .. otherwise need to wait 1 week.
+        version += 1;
+        emit VersionUpgraded(version);
     }
     /**
      * @notice Authorizes contract upgrades
