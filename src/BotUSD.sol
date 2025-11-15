@@ -94,7 +94,7 @@ contract BotUSD is
     /* ========== STATE VARIABLES ========== */
 
     address public deprecatedWithdrawNFT;
-    address public deprecatedFulfiller;
+    address public referrer; // was deprecatedFulfiller;
 
     /**
      * @notice Risk administrator with emergency powers
@@ -348,6 +348,11 @@ contract BotUSD is
         if (userWhitelistActive && !userWhitelist[receiver]) revert NotAuth();
     }
 
+    modifier onlyReferrer() {
+        if (msg.sender != referrer) revert NotAuth();
+        _;
+    }
+
     /* ========== ADMIN FUNCTIONS ========== */
 
     /**
@@ -438,6 +443,11 @@ contract BotUSD is
     function setUserWhitelist(address a, bool isWhitelisted) external onlyRiskAdminOrOwner {
         userWhitelist[a] = isWhitelisted;
         emit UserWhitelist(a, isWhitelisted);
+    }
+
+    function whitelistFromReferrer(address a) external onlyReferrer {
+        userWhitelist[a] = true;
+        emit UserWhitelist(a, true);
     }
 
     /**
@@ -796,7 +806,15 @@ contract BotUSD is
 
     function initializeV1_1() external onlyOwner {
         require(version == 1, "Already initialized");
-        lastRewardMintTime =  0;  // set to zero to test out reward mint live .. otherwise need to wait 1 week.
+        lastRewardMintTime = 0; // set to zero to test out reward mint live .. otherwise need to wait 1 week.
+        version += 1;
+        emit VersionUpgraded(version);
+    }
+
+    function initializeV1_2(address referrer_) external onlyOwner {
+        require(version == 2, "Already initialized");
+        if (referrer_ == address(0)) revert ZeroAddress();
+        referrer = referrer_; // set to zero to test out reward mint live .. otherwise need to wait 1 week.
         version += 1;
         emit VersionUpgraded(version);
     }

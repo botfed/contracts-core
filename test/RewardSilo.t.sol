@@ -8,7 +8,6 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {PausableUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 
-
 /* ---------------------- Mock BotUSD (mintRewards gated) ---------------------- */
 contract MockMintableBotUSD is IERC20 {
     string public name = "Mock BotUSD";
@@ -37,6 +36,12 @@ contract MockMintableBotUSD is IERC20 {
     }
     function allowance(address o, address s) external view returns (uint256) {
         return _allow[o][s];
+    }
+
+    function mint(uint256 amt) external returns (uint256) {
+        _supply += amt;
+        _bal[msg.sender] += amt;
+        return amt;
     }
 
     function approve(address s, uint256 amt) external returns (bool) {
@@ -204,7 +209,7 @@ contract RewardSiloTest is Test {
         assertEq(silo.lastUndripped(), amt);
         assertEq(silo.lastDripDuration(), silo.dripDuration());
         assertEq(silo.lastSupply(), silo.asset().totalSupply());
-        assertEq(silo.projectedApr(), 10_000 * amt * 365 days / (silo.dripDuration() * silo.asset().totalSupply()));
+        assertEq(silo.projectedApr(), (10_000 * amt * 365 days) / (silo.dripDuration() * silo.asset().totalSupply()));
         console.log("Projected APR", silo.projectedApr());
     }
 
@@ -341,8 +346,20 @@ contract RewardSiloTest is Test {
     function testUUPSUpgrade() public {
         RewardSilo newImpl = new RewardSilo();
 
+        token.mint(100 ether);
+
+        vm.prank(owner); // onlyOwner
+        silo.mintRewards(100 ether);
+
+        vm.prank(owner); // onlyOwner
+        silo.upgradeToAndCall(address(newImpl), abi.encodeWithSelector(newImpl.initializeV1_0.selector));
+
         vm.prank(owner); // onlyOwner
         silo.upgradeToAndCall(address(newImpl), abi.encodeWithSelector(newImpl.initializeV1_1.selector));
-        assertEq(silo.version(), 1);
+
+        assertEq(silo.version(), 2);
+        assertEq(silo.totalMinted(), silo.lastUndripped());
+        assertEq(silo.totalMinted(), 100 ether);
+        assertEq(silo.lastSupply() + silo.lastUndripped(), token.totalSupply());
     }
 }
