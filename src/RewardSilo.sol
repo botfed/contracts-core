@@ -373,21 +373,10 @@ contract RewardSilo is
 
     /* ========== UPGRADE AUTHORIZATION ========== */
 
-    function initializeV1_0() external onlyOwner {
-        require(version == 0, "Version already initialized");
-        totalMinted = lastUndripped;
-        version += 1;
-    }
 
     function initializeV1_1() external onlyOwner {
-        require(version == 1, "Version already initialized");
+        require(version == 0, "Version already initialized");
         totalMinted = lastUndripped;
-        lastSupply = asset.totalSupply() - lastUndripped;
-        version += 1;
-    }
-    function initializeV1_2() external onlyOwner {
-        require(version == 2, "Version already initialized");
-        lastDripDuration = dripDuration;
         version += 1;
     }
 
