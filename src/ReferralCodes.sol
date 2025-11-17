@@ -92,9 +92,8 @@ contract ReferralCodes is Initializable, UUPSUpgradeable, OwnableUpgradeable {
         emit CodeCreated(code, owner_, DEFAULT_CLAIMS_PER_CODE);
     }
 
-    function claimCode(string calldata codeString) external {
+    function claimCode(bytes32 code) external {
         if (referredBy[msg.sender] != bytes32(0)) revert AlreadyReferred();
-        bytes32 code = keccak256(abi.encodePacked(codeString));
         if (referralCodes[code] == 0) revert InvalidCode();
         referredBy[msg.sender] = code;
         referralCodes[code] -= 1;
